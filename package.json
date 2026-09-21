@@ -1,0 +1,40 @@
+{
+  "name": "cloud-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node start.js",
+    "check": "node start.js --check",
+    "dev": "concurrently -n web,api -c cyan,magenta \"npm:dev:web\" \"npm:dev:api\"",
+    "dev:web": "vite",
+    "dev:api": "node --watch server/index.js",
+    "build": "vite build",
+    "preview": "vite preview",
+    "api": "node server/index.js",
+    "db:init": "node server/db/init.js",
+    "db:import": "node server/db/import-excel.js",
+    "db:import:unpaid": "node server/db/import-excel.js billed_unpaid",
+    "db:import:uninvoiced": "node server/db/import-excel.js shipped_uninvoiced"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "axios": "^1.20.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.1",
+    "echarts": "^6.1.0",
+    "element-plus": "^2.14.5",
+    "express": "^5.2.1",
+    "pg": "^8.23.0",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.42",
+    "vue-echarts": "^8.3.0",
+    "vue-router": "^5.3.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.8",
+    "concurrently": "^10.0.5",
+    "vite": "^8.3.0"
+  }
+}

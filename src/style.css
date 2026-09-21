@@ -1,0 +1,199 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family:
+    "Microsoft YaHei",
+    "PingFang SC",
+    Arial,
+    sans-serif;
+  background: #f5f7fb;
+  color: #1f2937;
+}
+
+button {
+  font: inherit;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.app-layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* 左侧菜单 */
+.sidebar {
+  width: 230px;
+  min-height: 100vh;
+  background: #111827;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.logo {
+  height: 72px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.logo-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2563eb;
+  color: white;
+}
+
+.menu {
+  padding: 16px 12px;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 46px;
+  padding: 0 14px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.menu-item.active {
+  background: #1f4d80;
+  color: white;
+}
+
+/* 右侧主体 */
+.main-area {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 顶部 */
+.topbar {
+  height: 64px;
+  background: white;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+}
+
+.topbar-left,
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.menu-toggle {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+}
+
+/* 主内容 */
+.content {
+  padding: 24px;
+}
+
+.welcome-card {
+  background: linear-gradient(135deg, #eaf2ff, #f7faff);
+  border: 1px solid #dce8fb;
+  border-radius: 20px;
+  padding: 32px;
+  margin-bottom: 24px;
+}
+
+.welcome-card h1 {
+  font-size: 32px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.welcome-card p {
+  color: #6b7280;
+  font-size: 15px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 24px;
+  min-height: 220px;
+}
+
+.card h2 {
+  font-size: 20px;
+  margin-bottom: 12px;
+}
+
+.card p {
+  color: #6b7280;
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    width: 190px;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}.menu-group {
+  margin-bottom: 6px;
+}
+
+.menu-item .arrow {
+  margin-left: auto;
+  font-size: 18px;
+  color: #94a3b8;
+}
+
+.submenu {
+  padding: 4px 0 6px 42px;
+}
+
+.submenu-item {
+  color: #94a3b8;
+  font-size: 14px;
+  padding: 10px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.submenu-item:hover {
+  color: white;
+  background: rgba(255, 255, 255, 0.06);
+}
