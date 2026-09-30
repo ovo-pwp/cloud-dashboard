@@ -135,6 +135,64 @@ node sync.js --pull     # 只抓取（不入库）
 > 后端运行时，若 `IMPORT_WATCH_ENABLED=true`，watcher 会监控「应收看板-数据导出」目录，
 > 抓完 15 秒内自动入库（与网页按钮双保险，导入幂等同日覆盖）。当前为 `false`（只用网页按钮触发）。
 
+### 同步状态与并发保护
+
+同步状态**持久化在数据库**（表 `sync_run`），不再是进程内存里的临时变量：
+
+- **重启不丢**：后端重启后，「系统管理」页仍能看到上次同步的时间、结果、耗时与日志；
+  页面上还有「同步历史」（最近 20 次，含触发来源 `网页端手动` / `定时轮询`）。
+- **被打断会如实标记**：同步跑到一半后端被杀，下次启动会把那条记录判为
+  `interrupted`（前端显示「上次同步被中断」），而不是悄悄变成「尚未同步」。
+- **同一时刻只允许一个同步任务**：锁在数据库层面 —— `sync_run.active` 上建了
+  **唯一部分索引**，并发插入第二条会直接失败。内存里还有一层快路径判断，但最终裁决权在数据库。
+  所以即使开了定时轮询，「立即同步」按钮和定时任务也不会同时写库。
+- **孤儿进程回收**：同步中途后端被杀，`node sync.js` 子进程可能变成孤儿继续写库。
+  启动时会按记录里的 PID 处理，但**先用命令行确认那确实是本项目的 `sync.js`**，才终止它
+  （拿不到命令行、或命令行不匹配时只告警不动手，避免 PID 被复用后误杀）。
+  用 `SYNC_REAP_ORPHAN=false` 可关闭自动回收。
+- **卡死的锁会自愈**：若发现锁超过 `SYNC_STALE_AFTER_MINUTES`（默认 20 分钟）未释放
+  **且**记录的 PID 已不存在，主动同步时会自动回收后重试一次；PID 还活着则老实返回「正在执行」。
+
+```bash
+node server/db/migrate-sync-run.js   # 建表（幂等），老库需执行一次
+```
+
+**回归测试**（只读写 `sync_run` 运行记录，不动业务数据）：
+
+```bash
+npm test                 # 状态持久化 + 互斥锁 + 自愈 + 孤儿回收
+npm run test:sync        # 只跑状态/锁相关
+npm run test:sync:reap   # 只跑孤儿进程回收
+```
+
+**全量体检**（需要后端已在 3000 端口运行）：
+
+```bash
+npm run test:audit       # 45 项：鉴权拦截 / 各业务接口与库内真值交叉核对 / 日期口径 / 数据库层
+npm run test:browser     # 12 项：真实 Chrome 跑冷启动、登录、令牌失效三条路径（需前端 dev server）
+```
+
+`test:browser` 用 Chrome headless + CDP 驱动，**不依赖 playwright**；截图输出到
+`test-results/browser/`。本机没有 Chrome 或前端没启动时会明确跳过并提示，而不是报一堆无关错误。
+
+## 日期口径（重要）
+
+本项目大量用 `DATE` 列做「每日快照」，这类值有两个经典陷阱，都已在代码层面统一规避：
+
+1. **`DATE` 列不能用 `toISOString()`** —— pg 读 `DATE` 返回的是**本地零点**的 `Date`，
+   转成 UTC 后会整体退回一天（东八区 `2026-09-21` → `2026-09-20`）。
+   → 能从 SQL 拿字符串就优先 `to_char(col,'YYYY-MM-DD')`；JS 侧一律走
+   `server/utils/date.js` 的 `toDateOnly()`，**不要再手写 `toISOString().slice(0,10)`**。
+2. **「今天」不能用 UTC 日期** —— `new Date().toISOString().slice(0,10)` 在北京时间
+   00:00–08:00 之间会比本地日期少一天，深夜同步会把快照记成昨天。
+   → 统一用 `todayDate()`。
+
+`npm run test:audit` 里的「快照日期全面对齐」用例会把**所有接口暴露的快照日期**与
+**库内真实 `MAX(snapshot_date)`** 一一比对（当前覆盖 14 处），任何一处再跑偏都会立刻失败。
+
+> 注意：从 Excel 读进来、经 SheetJS 序列号换算的**业务日期**（`doc_date` / `order_date`）
+> 本身按 UTC 口径解析，属于另一条链路，不要和上面的「快照日期」混为一谈。
+
 ## 技术栈
 
 | 层        | 技术                          |
@@ -182,31 +240,52 @@ cloud-dashboard/
 ├── start.js                    # 启动入口（体检 + 并行起前后端）
 ├── sync.js                     # 云端一键同步（抓金山文档 + 入库）
 ├── server/
-│   ├── index.js                # 服务入口：中间件、路由挂载、错误处理
+│   ├── index.js                # 服务入口：中间件、鉴权、路由挂载、错误处理
 │   ├── watcher.js              # 文件夹监控，自动导入新 Excel
+│   ├── scheduler.js            # 定时轮询（可选，默认关闭；与网页按钮共用同步锁）
 │   ├── services/
-│   │   └── importer.js         # Excel 导入核心逻辑（CLI/watcher/sync 共用）
+│   │   ├── importer.js         # Excel 导入核心逻辑（CLI/watcher/sync 共用）
+│   │   ├── syncRunner.js       # 同步执行器：状态持久化 + 数据库互斥锁 + 孤儿回收
+│   │   ├── syncAuth.js         # 登录（多账号）、无状态 HMAC 令牌、鉴权中间件
+│   │   ├── loginThrottle.js    # 登录限流（按 IP，计数落在 login_log 表）
+│   │   └── exportExcel.js      # Excel 导出（SheetJS 生成 + 响应头封装）
 │   ├── db/
 │   │   ├── pool.js             # 连接池与 query 封装
 │   │   ├── schema.sql          # 建表 + 视图（含 customer_platform_unpaid）
-│   │   ├── init.js             # 一键建表
-│   │   └── import-excel.js     # 导入命令行壳
+│   │   ├── init.js             # 一键建表（会 DROP，仅初始化用）
+│   │   ├── import-excel.js     # 导入命令行壳
+│   │   ├── migrate-login-log.js    # 增量建表：login_log（幂等）
+│   │   ├── migrate-sync-run.js     # 增量建表：sync_run（幂等）
+│   │   └── migrate-customer-platform.js
+│   ├── utils/
+│   │   └── date.js             # 日期口径唯一来源：toDateOnly / todayDate
+│   ├── test/                   # 回归测试（npm test，只碰运行记录表）
+│   │   ├── sync-run.test.mjs   # 状态持久化 + 互斥锁 + 自愈 + 回收安全边界
+│   │   ├── sync-reap.test.mjs  # 孤儿进程「确认 + 终止」
+│   │   ├── audit.test.mjs      # 全量体检：接口 × 库内真值交叉核对（只读）
+│   │   ├── browser-check.test.mjs  # 真实 Chrome（CDP）跑登录三条路径
+│   │   └── stub-sync.mjs       # 冒充 sync.js 的测试桩
 │   └── routes/
-│       └── receivable.js       # 全部业务接口（含客户平台）
+│       └── receivable.js       # 全部业务接口（含客户平台、同步、导出）
 ├── src/
 │   ├── api/
 │   │   ├── request.js          # axios 实例与拦截器
 │   │   └── index.js            # 接口封装
 │   ├── stores/biz.js           # 业务类型状态（Pinia）
+│   ├── composables/            # 自动刷新等组合式函数
 │   ├── layout/index.vue        # 侧边栏 + 业务类型切换
 │   ├── router/index.js         # 路由表
 │   └── views/
+│       ├── Homepage.vue        # 首页导航
 │       ├── Home.vue            # 数据概览
-│       ├── Detail.vue          # 明细查询（筛选+分页+排序）
+│       ├── Detail.vue          # 明细查询（筛选+分页+排序+导出）
 │       ├── ByCustomer.vue      # 按客户汇总
 │       ├── Trend.vue           # 每日快照趋势
-│       └── CustomerPlatformUnpaid.vue  # 客户平台未回款看板
-├── .env                        # 数据库配置 + 监控目录
+│       ├── CustomerPlatformUnpaid.vue  # 客户平台未回款看板
+│       ├── CustomerPlatformDetail.vue  # 客户平台订单明细（+导出）
+│       ├── System.vue          # 系统管理：同步、登录记录、数据源
+│       └── Login.vue           # 登录页（记住我 + 限流提示）
+├── .env                        # 数据库/登录/同步配置（见 .env.example）
 └── package.json
 ```
 
@@ -250,7 +329,7 @@ IMPORT_WATCH_FOLDER=C:/Users/Administrator/Desktop/应收看板-数据导出
 IMPORT_WATCH_INTERVAL=15000
 ```
 
-登录与同步口令配置（详见上方「登录与安全」）：
+登录与同步配置（详见上方「登录与安全」）：
 
 ```bash
 LOGIN_USERS=4111=4111          # 多账号：user=pass,user2=pass2
@@ -273,7 +352,7 @@ LOGIN_REMEMBER_TTL_HOURS=168
 - 采用**轮询**（默认 15 秒）而非 `fs.watch` —— Windows 上 `fs.watch` 事件不稳定且易重复触发
 - 按 `文件大小 + mtime` 生成指纹去重，同一版本只导入一次
 - 导入失败会移除指纹，允许你修好文件后自动重试
-- 快照日期取**当天**日期
+- 快照日期取**当天的本地日期**（`todayDate()`，不是 UTC 日期 —— 见上文「日期口径」）
 
 > 建议把监控目录单独设成一个「待导入」文件夹，不要直接指向桌面，避免误导入无关文件。
 

@@ -1,0 +1,50 @@
+# ============================================================
+# 后端镜像：Node 22 + Python3（同步脚本要调 kdocs_pull.py）
+#
+# 构建上下文 = 项目根目录（不是 deploy/），所以 COPY 路径按根目录写。
+#   docker build -f deploy/Dockerfile.api -t cloud-dashboard-api .
+# ============================================================
+FROM node:22-bookworm-slim
+
+# Python 是「立即同步」用的：kdocs_pull.py 只依赖标准库 + openpyxl，
+# Debian 自带 python3-openpyxl 包，不用 pip 装，镜像也更小更稳。
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      python3 \
+      python3-openpyxl \
+      ca-certificates \
+      tzdata \
+ && rm -rf /var/lib/apt/lists/*
+
+# 时区必须设对：项目大量依赖「本地日期」做每日快照，
+# 容器默认 UTC 会让快照日期在东八区少一天（正是之前踩过的坑）。
+ENV TZ=Asia/Shanghai
+
+WORKDIR /app
+
+# 先装依赖，利用层缓存：只要 package.json 没变就不重装
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+# 后端代码 + 同步脚本
+COPY server ./server
+COPY sync.js ./
+
+# 抓取脚本与金山文档凭证挂载点（由 compose 以只读/可写 bind mount 提供）
+# 注意：kdocs_pull.py 以「脚本所在目录的上一级」作为导出目录，
+# 所以 /data/kdocs 的上一级 /data 必须是可写的（compose 里挂了卷）
+VOLUME ["/data"]
+
+ENV NODE_ENV=production \
+    PORT=3000 \
+    PYTHON_PATH=python3 \
+    KDOCS_PULL_SCRIPT=/data/kdocs/kdocs_pull.py \
+    EXPORT_DIR=/data/应收看板-数据导出
+
+EXPOSE 3000
+
+# 健康检查打公开接口，不触发鉴权
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "server/index.js"]

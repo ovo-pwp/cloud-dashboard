@@ -1,0 +1,117 @@
+# ============================================================
+# 云端看板 —— 云服务器一键部署
+#
+#   cd deploy
+#   cp .env.example .env      # 然后按里面的说明改（至少改密码！）
+#   docker compose up -d --build
+#   ./init-db.sh              # 首次建表（只需一次）
+#
+# 架构：
+#   web (Caddy, 对外 80/443)  ──/api/*──▶  api (Express, 仅内网)
+#                                            │
+#                                            ▼
+#                                         db (PostgreSQL, 仅内网)
+#
+# 数据库不对公网暴露，只走 compose 内部网络。
+# ============================================================
+
+services:
+  # ------------------------------------------------------------
+  # 数据库
+  # ------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: cloud-dashboard-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cloud_dashboard}
+      POSTGRES_USER: ${POSTGRES_USER:-cloud_dashboard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 里设置 POSTGRES_PASSWORD}
+      TZ: Asia/Shanghai
+      # 中文排序/比较：源数据里有大量中文客户名
+      LANG: C.UTF-8
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-cloud_dashboard} -d ${POSTGRES_DB:-cloud_dashboard}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    # 不映射端口到宿主机：数据库只在内网可达
+    expose:
+      - "5432"
+
+  # ------------------------------------------------------------
+  # 后端 + 同步（Node + Python）
+  # ------------------------------------------------------------
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    container_name: cloud-dashboard-api
+    # 固定主机名：令牌签名（未配 AUTH_SECRET 时）会用到主机名，
+    # 容器重建默认会换主机名，导致所有人被强制退出登录
+    hostname: cloud-dashboard-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - ./.env
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+      # 由 compose 用上面的 POSTGRES_* 拼出来，避免手写 DATABASE_URL 时把主机名写成 localhost
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cloud_dashboard}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-cloud_dashboard}
+      # ★ 关键：请求经过 Caddy 转发，必须采信 X-Forwarded-For，
+      #   否则登录限流会把所有访问者算成同一个 IP，一个人输错密码就锁死全站
+      TRUST_PROXY: "true"
+      # 定时轮询（可选）：默认定时同步，间隔见 .env
+      KDOCS_SCHEDULER_ENABLED: ${KDOCS_SCHEDULER_ENABLED:-false}
+      # 同步相关路径（容器内）
+      PYTHON_PATH: python3
+      KDOCS_PULL_SCRIPT: /data/kdocs/kdocs_pull.py
+      EXPORT_DIR: /data/应收看板-数据导出
+      # 容器里没有桌面文件夹监控，关掉
+      IMPORT_WATCH_ENABLED: "false"
+    volumes:
+      # 抓取脚本 + 金山文档 Token（kdocs_pull.py 会在同目录写取数日志，故要可写）
+      - ./kdocs:/data/kdocs
+      # 抓取产出的 xlsx（kdocs_pull.py 的「上一级目录」就是 /data）
+      - kdocsdata:/data/应收看板-数据导出
+      # 同步日志
+      - apilogs:/app/server/logs
+    expose:
+      - "3000"
+
+  # ------------------------------------------------------------
+  # 前端静态站 + HTTPS + 反向代理
+  # ------------------------------------------------------------
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    container_name: cloud-dashboard-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      # 有域名 → 填域名（自动签发 HTTPS）；只想先用 IP 看 → 填 :80
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Caddy 的证书与配置必须持久化，否则每次重建都会重新申请证书（会撞 Let's Encrypt 频率限制）
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  kdocsdata:
+  apilogs:
+  caddy_data:
+  caddy_config:

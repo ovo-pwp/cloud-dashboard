@@ -91,6 +91,16 @@ export function getDetail(bizType, params = {}) {
   return request.get('/detail', { params: { bizType, ...params } })
 }
 
+/** 修改某条明细的备注（追款情况） */
+export function updateDetailNote(id, note) {
+  return request.put('/detail/note', { id, note })
+}
+
+/** 修改某条明细的人工提醒（与系统自动的 data_warning 是两个字段） */
+export function updateDetailReminder(id, reminder) {
+  return request.put('/detail/reminder', { id, reminder })
+}
+
 /** 按客户汇总 */
 export function getByCustomer(bizType) {
   return request.get('/by-customer', { params: { bizType } })
@@ -111,9 +121,24 @@ export function getWarnings(bizType) {
   return request.get('/warnings', { params: { bizType } })
 }
 
-/** 客户平台未回款 —— 顶部汇总 */
+/** 客户平台未回款 —— 顶部汇总（含上期对比） */
 export function getCustomerPlatformSummary() {
   return request.get('/customer-platform-unpaid/summary')
+}
+
+/** 客户平台未回款 —— 账龄分布（3个月以上 / 2个月 / 1个月 / 当月） */
+export function getCustomerPlatformAging() {
+  return request.get('/customer-platform-unpaid/aging')
+}
+
+/** 客户平台未回款 —— 按业务员汇总 */
+export function getCustomerPlatformBySalesperson() {
+  return request.get('/customer-platform-unpaid/by-salesperson')
+}
+
+/** 客户平台未回款 —— 按下单平台汇总 */
+export function getCustomerPlatformByPlatform() {
+  return request.get('/customer-platform-unpaid/by-platform')
 }
 
 /** 客户平台未回款 —— 客户+平台两级汇总 */
@@ -154,6 +179,11 @@ export function getSyncStatus() {
 /** 最近若干次同步记录（持久化在数据库，后端重启也不丢） */
 export function getSyncRuns(limit = 20) {
   return request.get('/sync/runs', { params: { limit } })
+}
+
+/** 数据新鲜度（所有角色可用，只含时间/成功/进行中三个字段） */
+export function getFreshness() {
+  return request.get('/freshness')
 }
 
 // ------------------------------------------------------------

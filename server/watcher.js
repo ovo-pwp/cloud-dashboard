@@ -7,6 +7,7 @@
 import fs from 'fs'
 import path from 'path'
 import { pool } from './db/pool.js'
+import { todayDate } from './utils/date.js'
 import {
   importExcel,
   importCustomerPlatformUnpaid,
@@ -51,12 +52,12 @@ async function tryImport(filePath) {
       bizType === CUSTOMER_PLATFORM_BIZ_TYPE
         ? await importCustomerPlatformUnpaid(pool, {
             xlsxPath: filePath,
-            snapshotDate: new Date().toISOString().slice(0, 10),
+            snapshotDate: todayDate(),
           })
         : await importExcel(pool, {
             bizType,
             xlsxPath: filePath,
-            snapshotDate: new Date().toISOString().slice(0, 10),
+            snapshotDate: todayDate(),
           })
 
     if (bizType === CUSTOMER_PLATFORM_BIZ_TYPE) {

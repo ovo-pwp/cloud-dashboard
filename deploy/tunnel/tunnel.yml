@@ -1,0 +1,7 @@
+tunnel: 03711351-f590-4b0a-9881-20ba0a7c9635
+credentials-file: C:/Users/Administrator/Desktop/cloud-dashboard/deploy/tunnel/tunnel.json
+
+ingress:
+  - hostname: tjhd.dpdns.org
+    service: http://localhost:3000
+  - service: http_status:404

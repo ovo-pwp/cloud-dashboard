@@ -78,6 +78,7 @@ CREATE TABLE receivable_detail (
   amount_1m       NUMERIC(16,2) NOT NULL DEFAULT 0,
   amount_current  NUMERIC(16,2) NOT NULL DEFAULT 0,
 
+  city            VARCHAR(50),                 -- 城市（源表「地址」列，仅「已开票未回款」有值）
   follow_up_note  TEXT,
   data_warning    TEXT,                        -- 数据质量提示（如账龄分档对不上）
 

@@ -1,9 +1,6 @@
 <template>
   <div class="container" v-loading="loading">
-    <div class="page-header">
-      <h1 class="main-title">{{ biz.label }} · 按客户汇总</h1>
-      <span class="sub">共 {{ records.length }} 个客户</span>
-    </div>
+    <PageHeader :title="`${biz.label} · 按客户汇总`" :sub="`共 ${records.length} 个客户`" />
 
     <div class="summary-bar">
       <span>金额合计 <b class="amount">{{ fmt(total) }}</b> 元</span>
@@ -61,6 +58,7 @@ import { Search } from '@element-plus/icons-vue'
 import { useBizStore } from '@/stores/biz'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { getByCustomer } from '@/api'
+import PageHeader from '@/components/PageHeader.vue'
 
 const biz = useBizStore()
 const { current } = storeToRefs(biz)
@@ -112,14 +110,7 @@ useAutoRefresh(loadData)
 
 <style scoped>
 .container { padding: 20px; background: #fff; border-radius: 8px; }
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 14px;
-}
-.main-title { font-size: 24px; margin: 0; color: #303133; }
-.sub { font-size: 13px; color: #909399; }
+/* 头部已交给 PageHeader 组件统一 */
 .summary-bar { margin-bottom: 12px; font-size: 14px; color: #606266; }
 .summary-bar .amount { color: #f56c6c; font-weight: 700; font-size: 17px; }
 .search-row { display: flex; gap: 12px; margin-bottom: 14px; }
@@ -142,4 +133,18 @@ useAutoRefresh(loadData)
   transition: width 0.6s ease;
 }
 .ratio-text { position: relative; font-size: 11px; color: #303133; line-height: 16px; }
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .container { padding: 10px; }
+  /* 头部字号/间距由 PageHeader 组件自己处理 */
+
+  .toolbar { flex-wrap: wrap; gap: 8px; padding: 10px; }
+  .toolbar .el-select,
+  .toolbar .el-input { width: 140px !important; }
+
+  :deep(.el-table) { font-size: 11px; min-width: 500px; }
+  :deep(.el-table th),
+  :deep(.el-table td) { padding: 6px 4px !important; }
+}
 </style>

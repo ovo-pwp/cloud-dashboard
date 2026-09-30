@@ -1,8 +1,6 @@
 <template>
   <div class="container" v-loading="loading">
-    <div class="page-header">
-      <h1 class="main-title">系统管理</h1>
-    </div>
+    <PageHeader title="系统管理" sub="数据同步 · Excel 导入 · 用户管理 · 登录日志 · 系统配置" />
 
     <!-- ============ 数据同步 ============ -->
     <el-card class="block" shadow="never">
@@ -149,8 +147,18 @@
         />
         <el-button type="primary" :loading="logLoading" @click="loadLog(1)">查询</el-button>
         <el-button :disabled="logLoading" @click="resetLog">重置</el-button>
-        <span class="muted">已配置账号：{{ logAccounts.join('、') || '（未配置）' }}</span>
+        <span class="muted">已配置账号：{{ accountsText || '（未配置）' }}</span>
       </div>
+
+      <p class="tip">
+        账号分两档，在 <code>.env</code> 的 <code>LOGIN_USERS</code> 里以
+        <code>用户名=密码:角色</code> 配置（不写
+        <code>:角色</code> 即管理员）：
+        <b>管理员</b>（<code>admin</code>）能用全部功能；
+        <b>成员</b>（<code>member</code>）能看看板、能导出 Excel、能改明细的备注，
+        但不能同步、也进不了本页。
+        改角色后重启服务立即生效，不必等旧令牌过期。
+      </p>
 
       <el-table
         v-loading="logLoading"
@@ -265,6 +273,8 @@ import {
   getSyncRuns,
   getLoginLog,
 } from '@/api'
+import { ROLE_LABEL } from '@/composables/useAuth'
+import PageHeader from '@/components/PageHeader.vue'
 
 const loading = ref(false)
 const syncing = ref(false)
@@ -322,6 +332,19 @@ const logLoading = ref(false)
 const logRows = ref([])
 const logTotal = ref(0)
 const logAccounts = ref([])
+
+/**
+ * 已配置账号的展示文本：`4111（管理员）、3905（成员）`
+ * 接口返回的是 [{ username, role }]，这里只做排版。
+ * 角色中文名统一取 ROLE_LABEL，别在这里再写一份映射（否则改名时两边会不一致）
+ */
+const accountsText = computed(() => {
+  const list = logAccounts.value || []
+  if (!list.length) return ''
+  return list
+    .map((a) => (a && typeof a === 'object' ? `${a.username}（${ROLE_LABEL[a.role] || a.role}）` : a))
+    .join('、')
+})
 const logStats = ref({ okTotal: 0, failTotal: 0, okToday: 0 })
 
 const logQuery = ref({
@@ -588,7 +611,7 @@ onUnmounted(stopPolling)
 
 <style scoped>
 .container { padding: 20px; background: #f0f2f5; }
-.main-title { font-size: 22px; margin: 0 0 16px; color: #303133; }
+/* 头部已交给 PageHeader 组件统一 */
 .block { margin-bottom: 16px; background: #fff; }
 .tip { color: #909399; font-size: 13px; margin: 12px 0 0; line-height: 1.7; }
 .tip code { background: #f5f7fa; padding: 1px 5px; border-radius: 3px; color: #606266; }

@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>云端看板 · 整体体检报告（2026-09-21）</title>
+<style>
+  :root{
+    --bg:#f2f5f8;
+    --card:#ffffff;
+    --line:#d8dee6;
+    --line-soft:#e8edf3;
+    --ink:#1b2432;
+    --ink-2:#4a5666;
+    --ink-3:#77828f;
+    --brand:#1f4e79;
+    --brand-2:#2c6ca8;
+    --ok:#1a7f37;
+    --ok-bg:#e8f5ec;
+    --bad:#c0342b;
+    --bad-bg:#fdeceb;
+    --warn:#9a6700;
+    --warn-bg:#fff6e0;
+    --code-bg:#f6f8fa;
+    --radius:10px;
+    --mono:"Cascadia Mono",Consolas,"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    font-size:14px;
+    line-height:1.7;
+  }
+  .page{max-width:1080px;margin:0 auto;padding:28px 20px 72px}
+
+  /* ---------- 页头 ---------- */
+  .hero{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-top:4px solid var(--brand);
+    border-radius:var(--radius);
+    padding:26px 30px 22px;
+    margin-bottom:18px;
+  }
+  .hero-top{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:14px}
+  .hero h1{margin:0;font-size:24px;letter-spacing:.3px;color:var(--brand)}
+  .hero .sub{margin:6px 0 0;color:var(--ink-2);font-size:13.5px}
+  .hero .meta{margin-top:14px;color:var(--ink-3);font-size:12.5px;display:flex;flex-wrap:wrap;gap:6px 18px}
+  .badge{
+    display:inline-flex;align-items:center;gap:7px;
+    padding:7px 14px;border-radius:999px;font-weight:600;font-size:13.5px;
+    background:var(--ok-bg);color:var(--ok);border:1px solid #b7e0c3;white-space:nowrap;
+  }
+  .badge .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+
+  /* ---------- KPI ---------- */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:26px}
+  .kpi{
+    background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px 18px;
+  }
+  .kpi .k{font-size:12.5px;color:var(--ink-3);letter-spacing:.4px}
+  .kpi .v{font-size:26px;font-weight:700;line-height:1.25;margin-top:4px;font-variant-numeric:tabular-nums}
+  .kpi .v small{font-size:13px;font-weight:600;color:var(--ink-3);margin-left:3px}
+  .kpi .n{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+  .v-ok{color:var(--ok)} .v-bad{color:var(--bad)} .v-brand{color:var(--brand-2)} .v-warn{color:var(--warn)}
+
+  /* ---------- 章节 ---------- */
+  section{
+    background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:22px 26px 24px;margin-bottom:18px;
+  }
+  section > h2{
+    margin:0 0 4px;font-size:17px;color:var(--brand);
+    padding-bottom:10px;border-bottom:2px solid var(--line-soft);
+  }
+  section > h2 .no{color:var(--ink-3);font-weight:600;margin-right:8px}
+  h3{font-size:14.5px;margin:22px 0 8px;color:var(--ink)}
+  h3:first-of-type{margin-top:16px}
+  p{margin:9px 0}
+  ul,ol{margin:9px 0;padding-left:22px}
+  li{margin:5px 0}
+  code{
+    font-family:var(--mono);font-size:12.5px;
+    background:var(--code-bg);border:1px solid var(--line-soft);
+    padding:1px 5px;border-radius:4px;color:#7a3e00;
+  }
+  pre{
+    font-family:var(--mono);font-size:12.5px;line-height:1.65;
+    background:var(--code-bg);border:1px solid var(--line-soft);border-left:3px solid var(--line);
+    border-radius:6px;padding:12px 14px;overflow-x:auto;margin:10px 0;
+  }
+  pre.bad{border-left-color:var(--bad);background:#fdf6f5}
+  pre.good{border-left-color:var(--ok);background:#f5fbf7}
+  pre b{color:var(--bad)}
+  pre i{color:var(--ok);font-style:normal}
+  pre .cmt{color:var(--ink-3)}
+  .cap{font-size:12px;color:var(--ink-3);margin:-4px 0 10px}
+
+  /* ---------- 表格 ---------- */
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{padding:9px 11px;border:1px solid var(--line-soft);text-align:left;vertical-align:top}
+  th{background:#f4f7fa;color:var(--ink-2);font-weight:600;white-space:nowrap}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  tbody tr:nth-child(even) td{background:#fafcfd}
+  .t-ok{color:var(--ok);font-weight:600}
+  .t-bad{color:var(--bad);font-weight:600}
+  .t-warn{color:var(--warn);font-weight:600}
+  .t-mute{color:var(--ink-3)}
+
+  /* ---------- 提示框 ---------- */
+  .note{border-radius:8px;padding:13px 16px;margin:14px 0;border:1px solid;font-size:13.5px}
+  .note .t{font-weight:700;margin-bottom:4px}
+  .note p:first-of-type{margin-top:0}
+  .note p:last-child{margin-bottom:0}
+  .n-info{background:#eef5fc;border-color:#c3daf0;color:#19456b}
+  .n-warn{background:var(--warn-bg);border-color:#f0dca6;color:#6b4a00}
+  .n-bad{background:var(--bad-bg);border-color:#f3c9c4;color:#7d221b}
+  .n-ok{background:var(--ok-bg);border-color:#b7e0c3;color:#135c29}
+
+  /* ---------- 条形图 ---------- */
+  .bars{display:flex;flex-direction:column;gap:9px;margin:14px 0 6px}
+  .bar-row{display:grid;grid-template-columns:120px 1fr 132px;gap:12px;align-items:center;font-size:13px}
+  .bar-track{height:20px;background:#eef2f6;border-radius:4px;overflow:hidden;position:relative}
+  .bar-fill{height:100%;border-radius:4px}
+  .bar-fill.f1{background:#c0342b}
+  .bar-fill.f2{background:#e08a2e}
+  .bar-fill.f3{background:#d9b53a}
+  .bar-fill.f4{background:#6fa8d6}
+  .bar-fill.f5{background:#9dc3e0}
+  .bar-fill.f6{background:#b9c4cf}
+  .bar-val{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+  .bar-lab{color:var(--ink-2)}
+
+  /* ---------- 流程 SVG ---------- */
+  .flow{width:100%;height:auto;display:block;margin:10px 0 4px}
+
+  /* ---------- 打印 ---------- */
+  @media print{
+    body{background:#fff;font-size:11.5pt}
+    .page{max-width:none;padding:0}
+    section,.hero,.kpi{break-inside:avoid;page-break-inside:avoid}
+    .hero{border-top-color:#1f4e79}
+    a{color:inherit;text-decoration:none}
+  }
+  @media (max-width:640px){
+    .bar-row{grid-template-columns:88px 1fr 104px;font-size:12px}
+    .hero{padding:20px}
+    section{padding:18px}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ============ 页头 ============ -->
+  <div class="hero">
+    <div class="hero-top">
+      <div>
+        <h1>云端看板 · 整体体检报告</h1>
+        <p class="sub">已开票未回款 · 已发货未开票 · 客户平台未回款 —— 统一看板</p>
+      </div>
+      <span class="badge"><span class="dot"></span>体检结论：通过</span>
+    </div>
+    <div class="meta">
+      <span>体检日期：2026-09-21</span>
+      <span>数据快照：2026-09-21</span>
+      <span>最近同步：#63 网页端手动 · 成功 · 耗时 11.1 秒</span>
+      <span>项目：<code>C:\Users\Administrator\Desktop\cloud-dashboard</code></span>
+    </div>
+  </div>
+
+  <!-- ============ KPI ============ -->
+  <div class="kpis">
+    <div class="kpi">
+      <div class="k">体检结论</div>
+      <div class="v v-ok">通过</div>
+      <div class="n">全部接口与库内真值一致</div>
+    </div>
+    <div class="kpi">
+      <div class="k">自动化验证</div>
+      <div class="v v-brand">82<small>项通过</small></div>
+      <div class="n">0 项失败 · 4 套测试</div>
+    </div>
+    <div class="kpi">
+      <div class="k">本轮发现并修复</div>
+      <div class="v v-bad">2<small>个真缺陷</small></div>
+      <div class="n">均为用户可见问题</div>
+    </div>
+    <div class="kpi">
+      <div class="k">数据新鲜度</div>
+      <div class="v v-ok">最新<small>2026-09-21</small></div>
+      <div class="n">3 个数据源全部就绪</div>
+    </div>
+  </div>
+
+  <!-- ============ 一、执行摘要 ============ -->
+  <section>
+    <h2><span class="no">一</span>执行摘要</h2>
+
+    <p>本次对云端看板做了一次<strong>全链路整体检查</strong>：从登录鉴权、26 个业务接口、
+    PostgreSQL 库内数据一致性，一直到前端页面在真实浏览器里的表现，逐层交叉核对。</p>
+
+    <p>结果是<strong>体检通过</strong>，但过程中揪出了 <strong>2 个真实缺陷</strong> —— 都不是崩溃型问题，
+    而是「数字看着对、其实口径错了」的隐蔽类型，只在特定条件下暴露：</p>
+
+    <ol>
+      <li><strong>快照日期在东八区整体回退一天</strong>：首页「客户平台未回款」显示 2026-09-20，
+      而库里最新快照是 2026-09-21。读者会以为这条数据是昨天的。</li>
+      <li><strong>从未登录过的人第一次打开会看到「登录已过期」</strong>：让人误以为账号出了问题，
+      实际只是还没登录。</li>
+    </ol>
+
+    <div class="note n-info">
+      <div class="t">为什么第一个缺陷差点被漏掉</div>
+      <p>上一轮已经修过同类的日期缺陷，但<strong>只改了其中一处</strong>（同步状态的数据源汇总），
+      客户平台那一整块没跟着改。纯接口层面的自动化检查「合计金额对得上就算过」，查不出日期错；
+      这次是靠<strong>真实浏览器截图肉眼比对</strong>才发现的。因此本轮把「所有接口暴露的快照日期
+      vs 库内真实最新快照」做成了<strong>固定回归断言</strong>，覆盖 14 处，以后再漏会立刻失败。</p>
+    </div>
+  </section>
+
+  <!-- ============ 二、缺陷详情 ============ -->
+  <section>
+    <h2><span class="no">二</span>发现的两个缺陷与修复</h2>
+
+    <h3>缺陷 1 · 快照日期在东八区回退一天 <span class="t-bad">（已修复）</span></h3>
+
+    <table>
+      <tr><th style="width:96px">现象</th>
+        <td>首页「数据源明细」里客户平台未回款显示 <strong>2026-09-20</strong>，另两个数据源显示 <strong>2026-09-21</strong>；
+        客户平台相关页面的日期与 Excel 导出文件名同样少一天。</td></tr>
+      <tr><th>根因</th>
+        <td>PostgreSQL 的 <code>DATE</code> 列被 <code>pg</code> 读成 <strong>本地零点</strong>的 JS <code>Date</code>；
+        再经 <code>new Date(x).toISOString()</code> 换算成 UTC，东八区就会整体退一天。<br>
+        上一轮只修了 <code>collectSources()</code>，<code>receivable.js</code> 里客户平台那块剩下的
+        <strong>5 处</strong>（<code>getCpuLatestSnapshot()</code> + summary / breakdown / detail / 导出文件名）继续错，
+        而首页卡片恰好读的正是 <code>/api/customer-platform-unpaid/summary</code>。</td></tr>
+      <tr><th>影响面</th>
+        <td>首页卡片与数据源明细、客户平台三个查询接口、两个 Excel 导出文件名。金额与行数都是对的，<strong>只有日期错</strong>，所以极难被数值校验发现。</td></tr>
+      <tr><th>修复</th>
+        <td>把日期口径收敛到<strong>唯一出处</strong> <code>server/utils/date.js</code>；SQL 侧优先直接
+        <code>to_char(col,'YYYY-MM-DD')</code> 取字符串，不再二次换算。</td></tr>
+      <tr><th>连带修复</th>
+        <td>同一类隐患还有 6 处：<code>watcher.js</code>×2、<code>scheduler.js</code>、
+        <code>importer.js</code>×2、<code>import-excel.js</code> 用
+        <code>new Date().toISOString().slice(0,10)</code> 取「今天」—— 北京时间 00:00–08:00 之间
+        会比本地日期少一天，<strong>深夜同步会把快照记成昨天</strong>，现已统一改为本地日期。</td></tr>
+    </table>
+
+    <p class="cap">修复前后对比（问题在「多绕了一道 UTC 换算」）：</p>
+<pre class="bad"><span class="cmt">// ✗ 错误：DATE 列 → Date → UTC，东八区退一天</span>
+snapshotDate: <b>new Date(snapshot).toISOString().slice(0, 10)</b>
+<span class="cmt">// 2026-09-21 变成 "2026-09-20"</span></pre>
+<pre class="good"><span class="cmt">// ✓ 正确：SQL 里直接取字符串，不做任何时区换算</span>
+<i>SELECT to_char(MAX(snapshot_date),'YYYY-MM-DD') AS d FROM customer_platform_unpaid</i>
+<span class="cmt">// 拿到就是 "2026-09-21"，直接返回</span>
+snapshotDate: snapshot</pre>
+
+    <h3>缺陷 2 · 冷启动误报「登录已过期」 <span class="t-bad">（已修复）</span></h3>
+
+    <table>
+      <tr><th style="width:96px">现象</th>
+        <td>从未登录过的浏览器第一次打开系统，页面右下角弹出红色提示「登录已过期，请重新登录」，
+        但用户其实<strong>压根还没登录过</strong>，看到提示会以为账号异常。</td></tr>
+      <tr><th>根因</th>
+        <td>前端启动时会调用 <code>getMe()</code> 查询登录状态，未登录时后端返回 401 —— 这是<strong>设计行为</strong>。
+        但全局 401 拦截器不区分「带了令牌却被拒」和「压根没带令牌」，一律弹「已过期」。</td></tr>
+      <tr><th>修复</th>
+        <td>请求拦截器记录本次请求是否真的带了令牌（<code>config.__sentToken</code>），
+        只有<strong>带着令牌却被拒</strong>才提示过期；没带令牌就静默跳转登录页。</td></tr>
+      <tr><th>验证</th>
+        <td>真实浏览器三条路径全部覆盖：冷启动不弹提示 / 正常登录不误报 / 坏令牌正常提示并清空令牌。</td></tr>
+    </table>
+  </section>
+
+  <!-- ============ 三、验证结果 ============ -->
+  <section>
+    <h2><span class="no">三</span>验证结果</h2>
+
+    <p>本轮共执行 <strong>82 项</strong>自动化断言，全部通过。四套测试各有分工：</p>
+
+    <table>
+      <thead>
+        <tr><th>测试套件</th><th>命令</th><th class="num">断言数</th><th class="num">结果</th><th>覆盖内容</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>同步状态与互斥锁</td>
+          <td><code>npm run test:sync</code></td>
+          <td class="num">20</td><td class="num t-ok">通过</td>
+          <td>表结构与唯一部分索引、抢锁/拒并发/释放、重启恢复、卡死锁自愈、回收安全边界</td>
+        </tr>
+        <tr>
+          <td>孤儿进程回收</td>
+          <td><code>npm run test:sync:reap</code></td>
+          <td class="num">5</td><td class="num t-ok">通过</td>
+          <td>确认命令行后终止、幂等、开关关闭时拒绝动手</td>
+        </tr>
+        <tr>
+          <td>全量体检</td>
+          <td><code>npm run test:audit</code></td>
+          <td class="num">45</td><td class="num t-ok">通过</td>
+          <td>鉴权拦截、各业务接口与库内真值交叉核对、<strong>快照日期全面对齐（14 处）</strong>、数据库层、构建产物</td>
+        </tr>
+        <tr>
+          <td>真实浏览器</td>
+          <td><code>npm run test:browser</code></td>
+          <td class="num">12</td><td class="num t-ok">通过</td>
+          <td>冷启动跳转、登录流程、令牌失效提示与清理、控制台无未捕获异常（含截图）</td>
+        </tr>
+        <tr style="font-weight:700">
+          <td colspan="2">合计</td>
+          <td class="num">82</td><td class="num t-ok">全部通过</td>
+          <td class="t-mute" style="font-weight:400">另有 <code>vite build</code> 生产构建通过</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note n-ok">
+      <div class="t">体检的判定口径</div>
+      <p>所有断言都是把<strong>接口返回</strong>与<strong>数据库内真值</strong>互相核对，而不是拿写死的期望值比。
+      因此上游金山文档的数据每天变动也<strong>不会误报</strong>，只有真正的口径漂移才会失败。</p>
+    </div>
+
+    <h3>关键交叉核对项</h3>
+    <ul>
+      <li><strong>明细逐行求和 == 汇总金额</strong>：未回款 203 行求和 = ¥5,599,504.68；未开票 547 行求和 = ¥11,482,628.61；客户平台 238 行求和 = ¥8,009,507.76</li>
+      <li><strong>账龄分档各档之和 == 总额</strong>：两个业务类型均自洽</li>
+      <li><strong>三个页面读同一份数据</strong>：按业务员汇总、按客户汇总、明细查询三处合计完全一致</li>
+      <li><strong>Excel 导出可解析</strong>：导出行数 == 页面总数（验证确实绕开分页上限），金额为数值型可被 Excel 求和</li>
+      <li><strong>数据质量异常不被静默吞掉</strong>：库内标记的异常行数 == 告警接口返回条数</li>
+      <li><strong>并发保护仍然有效</strong>：库内无残留活跃同步记录，互斥索引在位</li>
+    </ul>
+  </section>
+
+  <!-- ============ 四、当前数据状态 ============ -->
+  <section>
+    <h2><span class="no">四</span>当前系统状态与数据快照</h2>
+
+    <h3>数据源</h3>
+    <table>
+      <thead>
+        <tr><th>数据源</th><th>快照日期</th><th class="num">行数</th><th class="num">金额（元）</th><th class="num">较前一日</th><th>最近入库</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>已开票未回款</td><td>2026-09-21</td><td class="num">203</td>
+          <td class="num">5,599,504.68</td>
+          <td class="num t-ok">↓ 10.8%</td><td>2026-09-21 14:55</td>
+        </tr>
+        <tr>
+          <td>已发货未开票</td><td>2026-09-21</td><td class="num">547</td>
+          <td class="num">11,482,628.61</td>
+          <td class="num t-ok">↓ 2.4%</td><td>2026-09-21 14:55</td>
+        </tr>
+        <tr>
+          <td>客户平台未回款</td><td>2026-09-21</td><td class="num">238</td>
+          <td class="num">8,009,507.76</td>
+          <td class="num t-mute">持平</td><td>2026-09-21 14:55</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="cap">「较前一日」对比 2026-09-20 快照：未回款 6,274,339.97 → 5,599,504.68（减少 674,835.29）；
+    未开票 11,759,741.01 → 11,482,628.61（减少 277,112.40）。</p>
+
+    <h3>账龄分布</h3>
+
+    <p class="cap" style="margin-top:6px"><strong>已开票未回款</strong> · 合计 ¥5,599,504.68</p>
+    <div class="bars">
+      <div class="bar-row"><span class="bar-lab">三个月以上</span>
+        <div class="bar-track"><div class="bar-fill f1" style="width:33.8%"></div></div>
+        <span class="bar-val">1,892,169.03 <span class="t-mute">33.8%</span></span></div>
+      <div class="bar-row"><span class="bar-lab">当月未回款</span>
+        <div class="bar-track"><div class="bar-fill f2" style="width:31.1%"></div></div>
+        <span class="bar-val">1,744,075.59 <span class="t-mute">31.1%</span></span></div>
+      <div class="bar-row"><span class="bar-lab">一个月</span>
+        <div class="bar-track"><div class="bar-fill f3" style="width:25.6%"></div></div>
+        <span class="bar-val">1,432,374.41 <span class="t-mute">25.6%</span></span></div>
+      <div class="bar-row"><span class="bar-lab">两个月</span>
+        <div class="bar-track"><div class="bar-fill f4" style="width:6.2%"></div></div>
+        <span class="bar-val">344,767.60 <span class="t-mute">6.2%</span></span></div>
+      <div class="bar-row"><span class="bar-lab">三个月</span>
+        <div class="bar-track"><div class="bar-fill f5" style="width:3.3%"></div></div>
+        <span class="bar-val">186,118.05 <span class="t-mute">3.3%</span></span></div>
+      <div class="bar-row"><span class="bar-lab t-mute">未分类</span>
+        <div class="bar-track"></div>
+        <span class="bar-val t-mute">0.00</span></div>
+    </div>
+
+    <p class="cap" style="margin-top:18px"><strong>已发货未开票</strong> · 合计 ¥11,482,628.61</p>
+    <div class="bars">
+      <div class="bar-row"><span class="bar-lab">三个月以上</span>
+        <div class="bar-track"><div class="bar-fill f1" style="width:70.5%"></div></div>
+        <span class="bar-val">8,098,878.72 <span class="t-mute">70.5%</span></span></div>
+      <div class="bar-row"><span class="bar-lab">当月未开票</span>
+        <div class="bar-track"><div class="bar-fill f2" style="width:13.6%"></div></div>
+        <span class="bar-val">1,556,854.04 <span class="t-mute">13.6%</span></span></div>
+      <div class="bar-row"><span class="bar-lab">一个月</span>
+        <div class="bar-track"><div class="bar-fill f3" style="width:6.3%"></div></div>
+        <span class="bar-val">728,972.43 <span class="t-mute">6.3%</span></span></div>
+      <div class="bar-row"><span class="bar-lab">两个月</span>
+        <div class="bar-track"><div class="bar-fill f4" style="width:6.0%"></div></div>
+        <span class="bar-val">685,105.89 <span class="t-mute">6.0%</span></span></div>
+      <div class="bar-row"><span class="bar-lab">三个月</span>
+        <div class="bar-track"><div class="bar-fill f5" style="width:3.6%"></div></div>
+        <span class="bar-val">415,524.68 <span class="t-mute">3.6%</span></span></div>
+      <div class="bar-row"><span class="bar-lab t-mute">未分类</span>
+        <div class="bar-track"></div>
+        <span class="bar-val t-mute">−2,707.15</span></div>
+    </div>
+    <p class="cap">账龄分档取自库内 <code>aging_category</code> 字段，各档之和已校验等于总额。
+    「未分类」为负值来自上游的红冲（退款）行，属源数据本身的情况，系统按原样保留并标记。</p>
+
+    <div class="note n-warn">
+      <div class="t">数据质量告警：1 条（上游问题，已被系统标记而非隐藏）</div>
+      <p><strong>已发货未开票</strong>：单号 <code>ZX-26-2097</code> · 客户「个金部-张萍」· 业务员「唐良超」· 金额 ¥7,096.32<br>
+      源数据日期无效（源值 <code>1900/01/00</code>）、账龄分类为空且各分档为 0，但总额不为 0。
+      系统<strong>不丢弃、不修正</strong>，按原样入库并打上 <code>data_warning</code> 标记，明细页会高亮提示。</p>
+    </div>
+  </section>
+
+  <!-- ============ 五、架构与数据流 ============ -->
+  <section>
+    <h2><span class="no">五</span>架构与数据流</h2>
+
+    <svg class="flow" viewBox="0 0 1040 340" role="img"
+         aria-label="数据从金山文档经抓取脚本、Excel 文件、导入器写入 PostgreSQL，再由 Express API 提供给网页看板的流程">
+      <defs>
+        <marker id="ar" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="#7b93aa"/>
+        </marker>
+        <style>
+          .nbox{fill:#ffffff;stroke:#b9c9d8;stroke-width:1.4}
+          .nt{fill:#1b2432;font-size:13px;font-family:"Segoe UI","Microsoft YaHei",sans-serif;font-weight:600}
+          .ns{fill:#77828f;font-size:11px;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
+          .nb{fill:#2c6ca8;font-size:11.5px;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
+          .fl{stroke:#7b93aa;stroke-width:1.6;fill:none}
+          .fd{stroke:#8fa6bb;stroke-width:1.5;fill:none;stroke-dasharray:5 4}
+          .badge2{fill:#eef5fc;stroke:#c3daf0;stroke-width:1}
+          .bt{fill:#19456b;font-size:10.5px;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
+          .bs{fill:#3d6f9c;font-size:10px;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
+        </style>
+      </defs>
+
+      <!-- ===== 主链（y 110–184）：写入方向 ===== -->
+      <rect class="nbox" x="8"   y="110" width="150" height="74" rx="9"/>
+      <text class="nt" x="24" y="139">金山文档</text>
+      <text class="ns" x="24" y="158">云端数据源</text>
+      <text class="ns" x="24" y="173">3 张业务表</text>
+
+      <rect class="nbox" x="196" y="110" width="150" height="74" rx="9"/>
+      <text class="nt" x="212" y="139">kdocs_pull.py</text>
+      <text class="ns" x="212" y="158">抓取 · 关联字段映射</text>
+      <text class="ns" x="212" y="173">过滤财务部 / 空备注</text>
+
+      <rect class="nbox" x="384" y="110" width="150" height="74" rx="9"/>
+      <text class="nt" x="400" y="139">本地 Excel</text>
+      <text class="ns" x="400" y="158">应收看板-数据导出</text>
+      <text class="ns" x="400" y="173">3 个 xlsx 文件</text>
+
+      <rect class="nbox" x="572" y="110" width="150" height="74" rx="9"/>
+      <text class="nt" x="588" y="139">导入器</text>
+      <text class="ns" x="588" y="158">列名映射 · 校验</text>
+      <text class="ns" x="588" y="173">异常打标不丢弃</text>
+
+      <rect class="nbox" x="760" y="110" width="140" height="74" rx="9"/>
+      <text class="nt" x="776" y="139">PostgreSQL 16</text>
+      <text class="ns" x="776" y="158">3 张事实表 + 视图</text>
+      <text class="ns" x="776" y="173">每日快照</text>
+
+      <rect class="nbox" x="928" y="110" width="104" height="74" rx="9"/>
+      <text class="nt" x="942" y="139">网页看板</text>
+      <text class="ns" x="942" y="158">Vue 3</text>
+      <text class="ns" x="942" y="173">9 个页面</text>
+
+      <!-- 主链箭头：抓取 → 落文件 → 入库 -->
+      <path class="fl" d="M158,147 L190,147" marker-end="url(#ar)"/>
+      <path class="fl" d="M346,147 L378,147" marker-end="url(#ar)"/>
+      <path class="fl" d="M534,147 L566,147" marker-end="url(#ar)"/>
+      <path class="fl" d="M722,147 L754,147" marker-end="url(#ar)"/>
+
+      <!-- 读取方向：PostgreSQL → Express API → 网页看板 -->
+      <rect class="nbox" x="755" y="252" width="150" height="62" rx="9"/>
+      <text class="nt" x="771" y="277">Express API</text>
+      <text class="ns" x="771" y="295">26 个接口 · 鉴权前置</text>
+      <path class="fl" d="M830,184 L830,246" marker-end="url(#ar)"/>
+      <path class="fl" d="M905,283 L980,283 L980,190" marker-end="url(#ar)"/>
+
+      <!-- 横切：鉴权（作用在 API 层） -->
+      <rect class="badge2" x="400" y="252" width="330" height="62" rx="8"/>
+      <text class="nb" x="416" y="275">登录与鉴权</text>
+      <text class="bs" x="416" y="292">HMAC 无状态令牌 · 12h / 记住我 168h</text>
+      <text class="bs" x="416" y="306">按 IP 限流：15 分钟内失败 5 次即锁定</text>
+      <path class="fl" d="M730,283 L749,283" marker-end="url(#ar)"/>
+
+      <!-- 触发入口（三选一） -->
+      <rect class="badge2" x="60" y="250" width="270" height="64" rx="8"/>
+      <text class="nb" x="76" y="273">触发入口（三选一，共用同一把锁）</text>
+      <text class="bs" x="76" y="290">网页「立即同步」 · 定时轮询 · 命令行</text>
+      <text class="bs" x="76" y="304">当前：定时轮询未启用</text>
+      <path class="fd" d="M270,250 L270,190" marker-end="url(#ar)"/>
+
+      <!-- 横切：同步锁（作用在导入环节） -->
+      <rect class="badge2" x="497" y="20" width="300" height="54" rx="8"/>
+      <text class="nb" x="513" y="43">同步执行与并发保护</text>
+      <text class="bs" x="513" y="61">数据库级互斥锁 · 状态持久化 · 孤儿回收</text>
+      <path class="fd" d="M647,74 L647,104" marker-end="url(#ar)"/>
+
+      <!-- 横切：文件夹监控（作用在 Excel 落地之后） -->
+      <rect class="badge2" x="8" y="26" width="176" height="54" rx="8"/>
+      <text class="nb" x="24" y="49">文件夹监控（未启用）</text>
+      <text class="bs" x="24" y="67">轮询 15 秒 · 指纹去重</text>
+      <path class="fd" d="M184,53 L390,53 L390,104" marker-end="url(#ar)"/>
+    </svg>
+
+    <table>
+      <thead><tr><th style="width:130px">层次</th><th>技术选型</th></tr></thead>
+      <tbody>
+        <tr><td>前端</td><td>Vue 3.5（<code>&lt;script setup&gt;</code>）+ Vite 8（rolldown）+ Element Plus + Pinia + Vue Router + ECharts</td></tr>
+        <tr><td>后端</td><td>Node.js + Express 5，26 个接口，鉴权中间件挂在所有业务路由之前</td></tr>
+        <tr><td>数据库</td><td>PostgreSQL 16（库 <code>cloud_dashboard</code>），3 张事实表 + 6 个视图 + 2 张运行记录表</td></tr>
+        <tr><td>Excel</td><td>SheetJS（解析与导出共用同一版本）</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ 六、日期口径 ============ -->
+  <section>
+    <h2><span class="no">六</span>日期口径铁律（本次最重要的结论）</h2>
+
+    <p>本项目大量使用 <code>DATE</code> 列做「每日快照」，这类值有两个经典陷阱。
+    本次已把两条铁律在代码层面统一落地，并写成回归断言。</p>
+
+    <div class="note n-bad">
+      <div class="t">陷阱一：DATE 列不能经 toISOString()</div>
+      <p>PostgreSQL 的 <code>DATE</code> 被 <code>pg</code> 读成本地零点的 <code>Date</code>，
+      转成 UTC 后东八区<strong>整体退一天</strong>。</p>
+<pre class="bad" style="margin-bottom:0"><span class="cmt">// ✗ 2026-09-21 会变成 "2026-09-20"</span>
+new Date(x).toISOString().slice(0, 10)</pre>
+    </div>
+
+    <div class="note n-warn">
+      <div class="t">陷阱二：「今天」不能用 UTC 日期</div>
+      <p><code>new Date().toISOString().slice(0,10)</code> 是 <strong>UTC 日期</strong>，
+      北京时间 00:00–08:00 之间会比本地日期少一天 —— 深夜同步会把快照记成昨天。</p>
+<pre class="bad" style="margin-bottom:0"><span class="cmt">// ✗ 北京时间 9/22 凌晨 1 点，会得到 "2026-09-21"</span>
+new Date().toISOString().slice(0, 10)</pre>
+    </div>
+
+    <h3>统一做法</h3>
+    <table>
+      <thead><tr><th style="width:200px">场景</th><th>做法</th></tr></thead>
+      <tbody>
+        <tr><td>能在 SQL 里取</td><td>优先 <code>to_char(col,'YYYY-MM-DD')</code>，直接拿字符串</td></tr>
+        <tr><td>需要在 JS 里转换</td><td>统一走 <code>server/utils/date.js</code> 的 <code>toDateOnly()</code>（取本地日历字段，不做时区换算）</td></tr>
+        <tr><td>需要「今天」</td><td><code>todayDate()</code> —— 本地日期，不是 UTC 日期</td></tr>
+        <tr><td>禁止</td><td>全项目<strong>不再手写</strong> <code>toISOString().slice(0,10)</code> 处理快照日期</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note n-info">
+      <div class="t">不要混淆：业务日期是另一条链路</div>
+      <p>从 Excel 读入、经 SheetJS 序列号换算的<strong>业务日期</strong>（<code>doc_date</code> / <code>order_date</code>）
+      本身按 UTC 序列口径解析，属另一条链路，<strong>不要和「快照日期」一起改</strong>。
+      本次只对其中「字符串日期」这一分支做了加固：源里若有 <code>2026/9/21</code> 这类月份不补零的写法，
+      旧逻辑会按本地零点解析又少一天，现已统一走 <code>toDateOnly()</code>。</p>
+    </div>
+
+    <div class="note n-ok">
+      <div class="t">防止复发</div>
+      <p>体检脚本新增固定断言「快照日期全面对齐」：把所有暴露 <code>snapshotDate</code> 的接口
+      （当前 <strong>14 处</strong>）与库内真实 <code>MAX(snapshot_date)</code> 一一比对。
+      另有专项断言直接测 <code>utils/date.js</code> 对「DATE 列 / 斜杠 / 点号 / 补零与不补零」各种输入的稳定性。</p>
+    </div>
+  </section>
+
+  <!-- ============ 七、接口清单 ============ -->
+  <section>
+    <h2><span class="no">七</span>接口清单（26 个）</h2>
+
+    <p class="cap">除健康检查、登录、登出、当前登录状态外，所有接口都需要登录令牌；未登录一律返回 401。</p>
+
+    <table>
+      <thead><tr><th style="width:76px">分组</th><th style="width:300px">接口</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="5">登录鉴权</td><td><code>POST /api/login</code></td><td>换取令牌（支持「记住我」）</td></tr>
+        <tr><td><code>GET /api/me</code></td><td>当前登录状态与有效期</td></tr>
+        <tr><td><code>POST /api/logout</code></td><td>退出并记审计</td></tr>
+        <tr><td><code>GET /api/login-log</code></td><td>登录记录（分页 + 账号/结果/日期过滤）</td></tr>
+        <tr><td><code>GET /api/login-users</code></td><td>已配置账号列表（不含密码）</td></tr>
+
+        <tr><td rowspan="2">系统</td><td><code>GET /api/health</code></td><td>健康检查（公开）</td></tr>
+        <tr><td><code>GET /api/system-config</code></td><td>监控配置 + 3 个数据源状态</td></tr>
+
+        <tr><td rowspan="3">同步</td><td><code>POST /api/sync</code></td><td>立即同步（抓云端 → 入库）</td></tr>
+        <tr><td><code>GET /api/sync/status</code></td><td>同步进度与滚动日志</td></tr>
+        <tr><td><code>GET /api/sync/runs</code></td><td>同步历史（持久化，重启不丢）</td></tr>
+
+        <tr><td rowspan="10">看板数据</td><td><code>GET /api/biz-types</code></td><td>可用业务类型及最新快照</td></tr>
+        <tr><td><code>GET /api/summary</code></td><td>顶部汇总</td></tr>
+        <tr><td><code>GET /api/aging-summary</code></td><td>账龄分档汇总</td></tr>
+        <tr><td><code>GET /api/aging-by-salesperson</code></td><td>业务员 × 账龄档主表</td></tr>
+        <tr><td><code>GET /api/by-customer</code></td><td>按客户汇总</td></tr>
+        <tr><td><code>GET /api/detail</code></td><td>明细查询（分页 + 筛选 + 排序）</td></tr>
+        <tr><td><code>GET /api/filters</code></td><td>筛选项</td></tr>
+        <tr><td><code>GET /api/trend</code></td><td>每日快照趋势</td></tr>
+        <tr><td><code>GET /api/warnings</code></td><td>数据质量告警</td></tr>
+        <tr><td><code>GET /api/export/detail</code></td><td>导出明细 Excel（当前筛选的全部行）</td></tr>
+
+        <tr><td rowspan="6">客户平台</td><td><code>GET /api/customer-platform-unpaid/summary</code></td><td>汇总</td></tr>
+        <tr><td><code>GET /api/customer-platform-unpaid/platforms</code></td><td>平台列表</td></tr>
+        <tr><td><code>GET /api/customer-platform-unpaid/salespersons</code></td><td>业务员列表</td></tr>
+        <tr><td><code>GET /api/customer-platform-unpaid/breakdown</code></td><td>客户 → 平台两级汇总</td></tr>
+        <tr><td><code>GET /api/customer-platform-unpaid/detail</code></td><td>订单级明细</td></tr>
+        <tr><td><code>GET /api/export/customer-platform-detail</code></td><td>导出订单明细 Excel</td></tr>
+      </tbody>
+    </table>
+
+    <h3>前端页面（登录后 8 个 + 登录页）</h3>
+    <table>
+      <thead><tr><th style="width:280px">路径</th><th>页面</th></tr></thead>
+      <tbody>
+        <tr><td><code>/login</code></td><td>登录（公开）</td></tr>
+        <tr><td><code>/homepage</code></td><td>首页 —— 登录后默认落地页</td></tr>
+        <tr><td><code>/home</code></td><td>数据概览</td></tr>
+        <tr><td><code>/detail</code></td><td>明细查询</td></tr>
+        <tr><td><code>/by-customer</code></td><td>按客户汇总</td></tr>
+        <tr><td><code>/trend</code></td><td>每日趋势</td></tr>
+        <tr><td><code>/customer-platform-unpaid</code></td><td>客户平台未回款金额看板</td></tr>
+        <tr><td><code>/customer-platform-detail</code></td><td>客户平台订单明细</td></tr>
+        <tr><td><code>/system</code></td><td>系统管理（同步历史 / 登录记录 / 数据源）</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ 八、遗留 ============ -->
+  <section>
+    <h2><span class="no">八</span>已知问题与后续建议</h2>
+
+    <table>
+      <thead><tr><th style="width:96px">级别</th><th style="width:260px">事项</th><th>说明与建议</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="t-mute">观察</td>
+          <td>同步日志金额与库内合计差 1 分</td>
+          <td>同步日志里客户平台合计显示 ¥8,009,507.77，库内 SQL 求和为 ¥8,009,507.76。
+          差 0.01 元来自导入时在 JS 里逐行累加浮点数的舍入漂移，<strong>库内数据是对的</strong>，
+          看板显示的也是 SQL 求和结果，因此<strong>只影响日志那一行文字</strong>。若要消除，改成入库后再查一次合计即可。</td>
+        </tr>
+        <tr>
+          <td class="t-warn">建议</td>
+          <td>登录记录缺保留策略</td>
+          <td><code>login_log</code> 会持续增长（当前成功 41 / 失败 13）。建议加按天或按条数的清理策略。</td>
+        </tr>
+        <tr>
+          <td class="t-warn">建议</td>
+          <td>两个首页并存</td>
+          <td><code>Homepage.vue</code>（首页）与 <code>Home.vue</code>（数据概览）功能有重叠，容易让使用者困惑，可考虑合并。</td>
+        </tr>
+        <tr>
+          <td class="t-warn">建议</td>
+          <td>缺少服务化守护</td>
+          <td>目前后端靠手动 <code>node server/index.js</code> 常驻；建议用进程守护（pm2 / Windows 服务）保证意外退出后自动拉起。</td>
+        </tr>
+        <tr>
+          <td class="t-mute">清理</td>
+          <td><code>src/components/</code> 为空目录</td>
+          <td>可直接删除。</td>
+        </tr>
+        <tr>
+          <td class="t-mute">数据</td>
+          <td>上游红冲行导致「未分类」为负</td>
+          <td>已发货未开票「未分类」为 −2,707.15，来自上游红冲（退款）行。系统按原样保留并标记，<strong>不建议在导入侧修正</strong> —— 保持与源文件逐行一致才便于对账。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ 九、改动文件 ============ -->
+  <section>
+    <h2><span class="no">九</span>本轮改动文件</h2>
+
+    <table>
+      <thead><tr><th style="width:90px">类型</th><th style="width:340px">文件</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td rowspan="4"><span class="t-ok">新增</span></td>
+          <td><code>server/utils/date.js</code></td><td>日期口径唯一出处：<code>toDateOnly()</code> / <code>todayDate()</code></td></tr>
+        <tr><td><code>server/test/audit.test.mjs</code></td><td>全量体检 45 项（只读，接口 × 库内真值交叉核对）</td></tr>
+        <tr><td><code>server/test/browser-check.test.mjs</code></td><td>真实 Chrome 浏览器验证 12 项（零依赖，不需要 playwright）</td></tr>
+        <tr><td><code>.gitignore</code> 补 <code>test-results</code></td><td>截图产物不入库</td></tr>
+
+        <tr><td rowspan="6"><span class="t-warn">修改</span></td>
+          <td><code>server/routes/receivable.js</code></td><td>快照日期改取字符串；5 处调用点去掉二次换算</td></tr>
+        <tr><td><code>server/watcher.js</code>、<code>server/scheduler.js</code></td><td>「今天」改用本地日期</td></tr>
+        <tr><td><code>server/services/importer.js</code></td><td>快照日期 + 业务日期字符串分支加固</td></tr>
+        <tr><td><code>server/db/import-excel.js</code></td><td>命令行默认快照日期改用本地日期</td></tr>
+        <tr><td><code>src/api/request.js</code></td><td>401 拦截器区分「令牌过期」与「尚未登录」</td></tr>
+        <tr><td><code>package.json</code>、<code>README.md</code></td><td>新增 <code>test:audit</code> / <code>test:browser</code> 命令与「日期口径」章节</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note n-info">
+      <div class="t">复跑方式</div>
+      <p>后端需先跑在 3000 端口、前端 dev server 跑在 5173 端口，然后：</p>
+      <pre style="margin-bottom:0">npm test               <span class="cmt"># 同步锁 + 孤儿回收（25 项）</span>
+npm run test:audit     <span class="cmt"># 全量体检（45 项）</span>
+npm run test:browser   <span class="cmt"># 真实浏览器（12 项，截图落 test-results/browser/）</span></pre>
+    </div>
+  </section>
+
+  <p style="text-align:center;color:var(--ink-3);font-size:12px;margin-top:26px">
+    云端看板 · 整体体检报告 &nbsp;|&nbsp; 生成于 2026-09-21 &nbsp;|&nbsp; 数据快照 2026-09-21 &nbsp;|&nbsp; 82 项自动化验证全部通过
+  </p>
+
+</div>
+</body>
+</html>

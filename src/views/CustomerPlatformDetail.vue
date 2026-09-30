@@ -1,9 +1,12 @@
 <template>
   <div class="container">
-    <div class="page-header">
-      <h1 class="main-title">客户平台订单明细</h1>
-      <span class="sub" v-if="snapshotDate">{{ snapshotDate }}</span>
-    </div>
+    <PageHeader title="客户平台订单明细">
+      <template #meta>
+        <el-tag v-if="snapshotDate" class="snapshot-tag" type="info" effect="plain">
+          数据日期 {{ snapshotDate }}
+        </el-tag>
+      </template>
+    </PageHeader>
 
     <div class="toolbar">
       <el-select v-model="platform" placeholder="全部平台" clearable style="width: 160px" @change="openDetail(1)">
@@ -20,16 +23,21 @@
       />
       <el-button type="primary" :icon="Search" @click="openDetail(1)">查询</el-button>
       <el-button @click="resetDetail">重置</el-button>
-      <el-button
-        type="success"
-        plain
-        :icon="Download"
-        :loading="exporting"
-        :disabled="!total"
-        @click="onExport"
-      >
-        {{ exporting ? '导出中…' : '导出 Excel' }}
-      </el-button>
+      <!-- 导出对管理员和成员都开放；将来若有「不能导出」的角色，这里会自动置灰 -->
+      <el-tooltip :disabled="canExport" content="当前账号没有导出权限，请联系管理员" placement="top">
+        <span class="export-wrap">
+          <el-button
+            type="success"
+            plain
+            :icon="Download"
+            :loading="exporting"
+            :disabled="!total || !canExport"
+            @click="onExport"
+          >
+            {{ exporting ? '导出中…' : '导出 Excel' }}
+          </el-button>
+        </span>
+      </el-tooltip>
     </div>
 
     <div class="summary-bar">
@@ -83,11 +91,16 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Download } from '@element-plus/icons-vue'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
+import { useAuth } from '@/composables/useAuth'
+import PageHeader from '@/components/PageHeader.vue'
 import {
   getCustomerPlatformDetail,
   getCustomerPlatformList,
   exportCustomerPlatformDetail,
 } from '@/api'
+
+// 导出 Excel：管理员 + 成员都能用（后端 /api/export/* 同样是 CAN_EXPORT 放行）
+const { canExport } = useAuth()
 
 const loading = ref(false)
 const exporting = ref(false)
@@ -151,6 +164,10 @@ function resetDetail() {
 /** 导出当前筛选条件下的**全部**行（不受分页限制） */
 async function onExport() {
   if (exporting.value) return
+  if (!canExport.value) {
+    ElMessage.warning('当前账号没有导出权限，请联系管理员')
+    return
+  }
   exporting.value = true
   try {
     const filename = `客户平台订单明细_${snapshotDate.value || ''}_${total.value}行.xlsx`
@@ -174,9 +191,9 @@ useAutoRefresh(loadData)
 
 <style scoped>
 .container { padding: 20px; background: #fff; border-radius: 8px; }
-.page-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }
-.main-title { font-size: 22px; margin: 0; color: #303133; }
-.sub { font-size: 13px; color: #909399; }
+/* 头部已交给 PageHeader 组件统一 */
+/* 置灰按钮不触发鼠标事件，tooltip 得靠外面这层 span 接住悬停 */
+.export-wrap { display: inline-block; }
 .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
 .summary-bar { margin-bottom: 12px; font-size: 14px; color: #606266; }
 .summary-bar b { color: #303133; }
@@ -184,4 +201,22 @@ useAutoRefresh(loadData)
 .amount { font-weight: 600; color: #f56c6c; }
 .negative { font-weight: 600; color: #67c23a; }
 .pagination { margin-top: 16px; display: flex; justify-content: flex-end; }
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .container { padding: 10px; background: transparent; border-radius: 0; }
+  /* 头部字号/间距由 PageHeader 组件自己处理 */
+
+  .toolbar { gap: 8px; margin-bottom: 10px; }
+  .toolbar .el-select { width: 120px !important; }
+  .toolbar .el-input { width: 130px !important; }
+
+  .summary-bar { margin-bottom: 10px; font-size: 13px; }
+
+  :deep(.el-table) { font-size: 11px; min-width: 500px; }
+  :deep(.el-table th),
+  :deep(.el-table td) { padding: 6px 4px !important; }
+
+  .pagination { justify-content: center; }
+}
 </style>

@@ -20,15 +20,27 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { query, pool } from '../db/pool.js'
+import { resolveExecutable } from '../utils/executable.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '../..')
-const SYNC_SCRIPT = path.join(PROJECT_ROOT, 'sync.js')
+// 同步脚本可覆盖（SYNC_SCRIPT_PATH，相对项目根目录）：便于用桩脚本做端到端测试
+const SYNC_SCRIPT = path.resolve(PROJECT_ROOT, process.env.SYNC_SCRIPT_PATH || 'sync.js')
 const LOG_PATH = path.join(PROJECT_ROOT, 'server', 'logs', 'sync.log')
 
 // 依赖路径（与 sync.js 保持一致，用于前置校验，给出更友好的报错）
-const PY = process.env.PYTHON_PATH || 'C:/Users/Administrator/.workbuddy/binaries/python/envs/default/Scripts/python.exe'
-const KDOCS_PULL = 'C:/Users/Administrator/Desktop/看板模板/kdocs_pull.py'
+// 注意：容器化部署时 PYTHON_PATH 可能是 `python3` 这种「命令名」而非绝对路径，
+// 所以不能用 fs.existsSync 直接判断，要走 resolveExecutable 到 PATH 里找。
+const PY =
+  process.env.PYTHON_PATH ||
+  'C:/Users/Administrator/.workbuddy/binaries/python/envs/default/Scripts/python.exe'
+// ⚠ 取数脚本全项目只有这一份（桌面 `看板模板\kdocs_pull.py`），这是唯一的权威副本。
+//   2026-09-29 删除了 `deploy/kdocs/kdocs_pull.py`：那份是旧副本，缺一条业务规则
+//   （「备注含『无效订单』的行不计入已发货未开票看板」），一旦被误用会让看板凭空多出
+//   2 条单 / 25,476.86 元且不报任何错。旧副本已备份到 `.backup/20260929-1830/`。
+//   要改取数逻辑，改桌面那份；不要在这里或 deploy/ 下再复制一份。
+const KDOCS_PULL =
+  process.env.KDOCS_PULL_SCRIPT || 'C:/Users/Administrator/Desktop/看板模板/kdocs_pull.py'
 
 const MAX_LOG_LINES = 400
 
@@ -86,7 +98,7 @@ function preflight() {
   const missing = []
   if (!fs.existsSync(SYNC_SCRIPT)) missing.push(`同步脚本：${SYNC_SCRIPT}`)
   if (!fs.existsSync(KDOCS_PULL)) missing.push(`抓取脚本：${KDOCS_PULL}`)
-  if (!fs.existsSync(PY)) missing.push(`Python 解释器：${PY}`)
+  if (!resolveExecutable(PY)) missing.push(`Python 解释器：${PY}`)
   return missing
 }
 
@@ -234,8 +246,28 @@ function isPidAlive(pid) {
   }
 }
 
-/** 用 PowerShell 取某个进程的命令行（用于确认它确实是本项目的 sync.js） */
+const IS_WIN = process.platform === 'win32'
+
+/**
+ * 取某个进程的命令行（用于确认它确实是本项目的 sync.js）。
+ *
+ * 平台差异：Windows 走 PowerShell/CIM，Linux 直接读 /proc。
+ * 容器化部署（Linux）跑的是 /proc 分支 —— 早期只有 PowerShell 分支，
+ * 在 Linux 上 spawn 必然 ENOENT，退化成「永远校验不过、永不回收」，
+ * 于是 SYNC_REAP_ORPHAN=true 形同虚设。
+ */
 function readCommandLine(pid) {
+  if (!IS_WIN) {
+    try {
+      // /proc/<pid>/cmdline 以 NUL 分隔各参数，换成空格即可比对
+      const raw = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+      return Promise.resolve(raw.replace(/\0/g, ' ').trim())
+    } catch {
+      // 进程已退出或无权限：返回空串 → 上层按「无法确认」处理，不会误杀
+      return Promise.resolve('')
+    }
+  }
+
   return new Promise((resolve) => {
     const ps = spawn(
       'powershell.exe',
@@ -264,6 +296,23 @@ function readCommandLine(pid) {
 
 /** 终止进程树（含其下的 python 子进程） */
 function killTree(pid) {
+  if (!IS_WIN) {
+    // 子进程是以 detached 方式起的，自成进程组（组长 PID = 子进程 PID），
+    // 对 -pid 发信号即可整组终止，连带 sync.js 里再 fork 的 python。
+    try {
+      process.kill(-pid, 'SIGKILL')
+      return Promise.resolve({ ok: true, detail: `已终止进程组 ${pid}` })
+    } catch {
+      /* 可能不是组长（老版本遗留进程），退回单进程终止 */
+    }
+    try {
+      process.kill(pid, 'SIGKILL')
+      return Promise.resolve({ ok: true, detail: `已终止进程 ${pid}` })
+    } catch (e) {
+      return Promise.resolve({ ok: false, detail: e.message })
+    }
+  }
+
   return new Promise((resolve) => {
     const tk = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true })
     let out = ''
@@ -357,33 +406,50 @@ export async function initSyncState() {
   }
 }
 
-/** 同步结束后刷新各数据源快照，返回给前端做即时展示 */
+/**
+ * 各数据源的最新快照，供「系统管理」页展示。
+ *
+ * 注意两个坑：
+ *   1. snapshot_date 是 DATE 类型，pg 会读成「本地零点」的 Date 对象，
+ *      再走 toISOString() 在东八区会倒退一天 → 必须用 to_char 直接取字符串。
+ *   2. 客户平台表每次同步追加一个快照，统计必须限定在最新快照上，否则行数会翻倍。
+ */
 export async function collectSources() {
   const { rows: batches } = await query(
-    `SELECT biz_type, snapshot_date, imported_at, row_count, total_amount
+    `SELECT biz_type,
+            to_char(snapshot_date, 'YYYY-MM-DD') AS snapshot_date,
+            imported_at, row_count, total_amount
        FROM import_batch
-      WHERE id IN (SELECT MAX(id) FROM import_batch GROUP BY biz_type)
+      WHERE (biz_type, id) IN (
+            SELECT biz_type, MAX(id) FROM import_batch
+            GROUP BY biz_type)
       ORDER BY biz_type`
   )
   const sources = batches.map((b) => ({
     key: b.biz_type,
     label: b.biz_type === 'billed_unpaid' ? '已开票未回款' : '已发货未开票',
-    snapshotDate: new Date(b.snapshot_date).toISOString().slice(0, 10),
+    snapshotDate: b.snapshot_date,
     importedAt: b.imported_at,
     rows: Number(b.row_count),
     totalAmount: Number(b.total_amount),
   }))
 
+  // 金额口径与看板保持一致：用 sales_amount（销售金额），
+  // 不用 sales_amount_total（销售金额合计 = 导单销售金额，大 3 倍）。
+  // 见 server/routes/receivable.js 里 CPU_AMOUNT_COL 的说明。
   const cp = await query(
-    `SELECT MAX(snapshot_date) AS d, COUNT(*) AS cnt,
-            COALESCE(SUM(sales_amount_total),0) AS total
-       FROM customer_platform_unpaid`
+    `SELECT to_char(snapshot_date, 'YYYY-MM-DD') AS d,
+            COUNT(*)::int AS cnt,
+            COALESCE(SUM(sales_amount), 0) AS total
+       FROM customer_platform_unpaid
+      WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM customer_platform_unpaid)
+      GROUP BY snapshot_date`
   )
-  if (cp.rows[0].d) {
+  if (cp.rows[0]) {
     sources.push({
       key: 'customer_platform_unpaid',
       label: '客户平台未回款',
-      snapshotDate: cp.rows[0].d.toISOString().slice(0, 10),
+      snapshotDate: cp.rows[0].d,
       importedAt: null,
       rows: Number(cp.rows[0].cnt),
       totalAmount: Number(cp.rows[0].total),
@@ -518,6 +584,10 @@ export async function startSync({ trigger = 'manual' } = {}) {
     cwd: PROJECT_ROOT,
     env: { ...process.env, NO_COLOR: '1' },
     windowsHide: true,
+    // POSIX 下让子进程自成进程组（组长 PID = 子进程 PID），
+    // 这样回收孤儿时能 process.kill(-pid) 整组干掉，不会漏掉它 fork 的 python。
+    // Windows 不需要：那边用 taskkill /T 递归整棵树。
+    detached: !IS_WIN,
   })
 
   // 记下子进程 PID，供「后端被杀」后下次启动回收
@@ -584,7 +654,7 @@ export async function startSync({ trigger = 'manual' } = {}) {
   })
 
   child.on('close', (code) => {
-    // sync.js 退出码：0=全成功，1=抓取失败或部分导入失败
+    // sync.js 退出码：0=全成功，1=云端抓取失败，2=抓取成功但部分文件入库失败
     finish({
       code,
       step: code === 0 ? 'done' : 'error',
@@ -592,8 +662,10 @@ export async function startSync({ trigger = 'manual' } = {}) {
         code === 0
           ? '同步完成，看板已是最新数据'
           : code === 1
-            ? '同步未完全成功：云端抓取失败（可能凭证失效），已用本地已有文件入库'
-            : `同步异常退出（退出码 ${code}）`,
+            ? '同步未完全成功：云端抓取失败（可能凭证失效或网络不通），已用本地已有文件入库'
+            : code === 2
+              ? '同步未完全成功：数据已抓到，但部分文件入库失败，请查看下方日志'
+              : `同步异常退出（退出码 ${code}）`,
     })
   })
 

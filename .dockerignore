@@ -1,0 +1,40 @@
+# Docker 构建上下文排除项（上下文 = 项目根目录）
+# 目的：镜像里不夹带 node_modules、构建产物、密钥和本地数据。
+#
+# 注意：这里刻意不用 `*.png` / `*.md` 这类跨层级通配，
+# 否则以后往 src/assets 或 public 里加一张图就会莫名构建失败 —— 只精确排除已知的本地产物。
+
+# 依赖与构建产物（镜像里会重新装 / 重新构建）
+node_modules
+dist
+dist-ssr
+
+# 密钥与环境变量（绝不打进镜像）
+.env
+.env.*
+!.env.example
+deploy/.env
+
+# 版本控制与编辑器
+.git
+.gitignore
+.vscode
+.idea
+
+# 日志
+server/logs
+server.log
+
+# 本地数据与临时产物
+test-results
+board-home.png
+board-detail.png
+board-customer.png
+board-trend.png
+board-switch.png
+rollback-backup
+
+# 部署单元自带的东西（构建镜像时不需要）
+deploy/backups
+deploy/kdocs
+report

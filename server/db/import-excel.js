@@ -7,6 +7,7 @@
 import 'dotenv/config'
 import { Pool } from 'pg'
 import { importExcel, BIZ_TYPES } from '../services/importer.js'
+import { todayDate } from '../utils/date.js'
 
 const pool = new Pool({
   connectionString:
@@ -30,7 +31,7 @@ async function main() {
     process.exit(1)
   }
 
-  const snapshotDate = snapshotArg || new Date().toISOString().slice(0, 10)
+  const snapshotDate = snapshotArg || todayDate()
 
   console.log(`\n=== 导入任务 ===`)
   console.log(`业务类型: ${bizType} (${BIZ_TYPES[bizType].label})`)

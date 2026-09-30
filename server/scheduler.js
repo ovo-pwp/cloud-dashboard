@@ -15,9 +15,11 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { resolveExecutable } from './utils/executable.js'
 import path from 'path'
 
 import { pool } from './db/pool.js'
+import { todayDate } from './utils/date.js'
 import {
   importExcel,
   importCustomerPlatformUnpaid,
@@ -40,12 +42,22 @@ const PYTHON =
   process.env.PYTHON_PATH ||
   'C:/Users/Administrator/.workbuddy/binaries/python/envs/default/Scripts/python.exe'
 
+// PYTHON 可能是绝对路径（本机 Windows），也可能是命令名（容器里的 python3）。
+// 必须经 resolveExecutable 解析 —— 直接 existsSync('python3') 恒为 false，
+// 会让定时同步永远卡在「Python 不存在」。
+const PYTHON_BIN = resolveExecutable(PYTHON)
+
 const PULL_SCRIPT =
   process.env.KDOCS_PULL_SCRIPT ||
   'C:/Users/Administrator/Desktop/看板模板/kdocs_pull.py'
 
-const EXPORT_DIR = (process.env.IMPORT_WATCH_FOLDER || 'C:/Users/Administrator/Desktop/应收看板-数据导出')
-  .replace(/\\/g, '/')
+// 抓取输出目录：优先 EXPORT_DIR（与 sync.js 同一个变量），
+// 再退回 IMPORT_WATCH_FOLDER（监控目录，本项目里与导出目录是同一个），避免两处配岔
+const EXPORT_DIR = (
+  process.env.EXPORT_DIR ||
+  process.env.IMPORT_WATCH_FOLDER ||
+  'C:/Users/Administrator/Desktop/应收看板-数据导出'
+).replace(/\\/g, '/')
 
 // 与 sync.js 保持一致的表映射
 const TABLE_SPECS = [
@@ -89,14 +101,14 @@ function pull() {
       resolve({ ok: false })
       return
     }
-    if (!existsSync(PYTHON)) {
+    if (!PYTHON_BIN) {
       errLog('Python 不存在: ' + PYTHON)
       resolve({ ok: false })
       return
     }
 
     log('开始从金山文档拉取数据...')
-    const child = spawn(PYTHON, [PULL_SCRIPT], {
+    const child = spawn(PYTHON_BIN, [PULL_SCRIPT], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
@@ -135,7 +147,7 @@ async function importFile(tableSpec) {
     return false
   }
   try {
-    const snapshotDate = new Date().toISOString().slice(0, 10)
+    const snapshotDate = todayDate()
     let result
     if (tableSpec.bizType === CUSTOMER_PLATFORM_BIZ_TYPE) {
       result = await importCustomerPlatformUnpaid(pool, { xlsxPath: filePath, snapshotDate })
@@ -161,12 +173,21 @@ async function importFile(tableSpec) {
 // ------------------------------------------------------------
 
 /** 单次完整周期：抢锁 → 拉取 → 导入 → 释放锁 */
+/**
+ * 执行一轮「抓取 → 导入」。
+ *
+ * 返回值用于决定下次调度（2026-09-30 新增）：
+ *   'ok'      —— 全部成功，回到正常周期
+ *   'failed'  —— 抓取/导入失败，值得**短间隔重试**（多半是网络还没就绪/临时抖动）
+ *   'skipped' —— 被同步锁挡住（网页端手动同步正在跑），**不该重试**，
+ *                否则会和正在跑的那次打架
+ */
 async function tick() {
   // 与网页端「立即同步」共用同一把锁（数据库层面原子互斥），避免两边同时写库
   const lock = await acquireSyncLock({ trigger: 'scheduler' })
   if (!lock.ok) {
     log('已有同步任务在执行（网页端手动同步或上一轮尚未结束），本轮跳过')
-    return
+    return 'skipped'
   }
   runLines = []
 
@@ -177,7 +198,7 @@ async function tick() {
     if (!ok) {
       message = '定时同步：本轮抓取失败，跳过导入，等待下次周期重试'
       log(message)
-      return
+      return 'failed'
     }
 
     log('开始导入 ' + TABLE_SPECS.length + ' 张表...')
@@ -201,6 +222,7 @@ async function tick() {
     })
     runLines = []
   }
+  return okAll ? 'ok' : 'failed'
 }
 
 // ------------------------------------------------------------
@@ -234,9 +256,93 @@ export function startScheduler() {
   log('  导出目录: ' + EXPORT_DIR)
 
   // 启动时立即执行一次，把当前已有的文件也导入
-  tick().catch((err) => errLog('启动时首次拉取失败: ' + err.message))
+  schedule(0, 'startup')
+}
 
-  setInterval(() => {
-    tick().catch((err) => errLog('定时拉取失败: ' + err.message))
-  }, INTERVAL_MS)
+// ------------------------------------------------------------
+// 调度循环（2026-09-30 重写：失败后短间隔重试）
+//
+// 为什么不用 setInterval：
+//   原来「启动即跑一次 + setInterval(60min)」，如果启动那次失败（最常见的是
+//   开机后网络还没就绪 —— 实测 09:04 开机、09:05 就跑，报「连不上服务」），
+//   就得**干等 60 分钟**才重试。而这类失败往往十几秒后自己就好了。
+//
+// 现在的行为：
+//   成功 / 被锁跳过 → 回到正常周期 INTERVAL_MIN
+//   失败            → 按 RETRY_DELAYS 依次短间隔重试，用完后回正常周期
+//
+// 用递归 setTimeout 而不是 setInterval，是为了让「下一次的间隔」可以由本轮结果决定。
+// ------------------------------------------------------------
+
+/**
+ * 失败后的重试间隔（毫秒）。默认 2 分钟 → 5 分钟 → 15 分钟。
+ *
+ * 可用 `KDOCS_SCHEDULER_RETRY_MIN` 覆盖（逗号分隔的分钟数），
+ * 例如 `0.1,0.2` 表示 6 秒、12 秒 —— 主要是给演练/排查用，
+ * 便于在不改代码的前提下观察重试是否真的发生。
+ */
+const RETRY_DELAYS = (process.env.KDOCS_SCHEDULER_RETRY_MIN || '2,5,15')
+  .split(',')
+  .map((s) => Number(String(s).trim()))
+  .filter((n) => Number.isFinite(n) && n > 0)
+  .map((min) => Math.round(min * 60 * 1000))
+
+/**
+ * 决定下一轮该等多久。**纯函数**，抽出来是为了能单测 ——
+ * 调度逻辑写错（比如失败后不回退、一直 2 分钟重试）会静默持续跑，
+ * 肉眼很难发现，必须有断言守着。
+ *
+ * @param {'ok'|'failed'|'skipped'} result 本轮结果
+ * @param {number} retryIdx 已重试次数
+ * @returns {{ delayMs: number, nextRetryIdx: number, reason: string }}
+ */
+export function computeNextDelay(result, retryIdx, intervalMs = INTERVAL_MS, retryDelays = RETRY_DELAYS) {
+  // 成功、或被锁跳过（说明另一路同步在跑，跟着重试会打架）→ 回正常周期
+  if (result === 'ok') {
+    return { delayMs: intervalMs, nextRetryIdx: 0, reason: retryIdx > 0 ? '重试后已成功' : '正常周期' }
+  }
+  if (result === 'skipped') {
+    return { delayMs: intervalMs, nextRetryIdx: 0, reason: '被同步锁跳过' }
+  }
+  // 失败：还有重试额度就短间隔再来，否则回正常周期
+  if (retryIdx < retryDelays.length) {
+    return {
+      delayMs: retryDelays[retryIdx],
+      nextRetryIdx: retryIdx + 1,
+      reason: `失败重试第 ${retryIdx + 1}/${retryDelays.length} 次`,
+    }
+  }
+  return { delayMs: intervalMs, nextRetryIdx: 0, reason: '重试用尽，回正常周期' }
+}
+
+let retryIdx = 0
+let timer = null
+
+/** 延迟的可读文案：小于 1 分钟显示秒（演练时会配到秒级，显示「0 分钟后」很怪） */
+function fmtDelay(ms) {
+  return ms < 60000 ? `${Math.round(ms / 1000)} 秒` : `${Math.round(ms / 60000)} 分钟`
+}
+
+/**
+ * 安排下一轮。
+ * @param {number} delayMs 延迟
+ * @param {string} why     只进控制台日志（不进网页端同步日志，避免污染同步记录）
+ */
+function schedule(delayMs, why) {
+  if (timer) clearTimeout(timer)
+  if (why && delayMs > 0) {
+    notice(`下一轮：${fmtDelay(delayMs)}后（${why}）`)
+  }
+  timer = setTimeout(async () => {
+    let result = 'failed'
+    try {
+      result = await tick()
+    } catch (err) {
+      errLog('定时拉取失败: ' + err.message)
+      result = 'failed'
+    }
+    const { delayMs: next, nextRetryIdx, reason } = computeNextDelay(result, retryIdx)
+    retryIdx = nextRetryIdx
+    schedule(next, reason)
+  }, delayMs)
 }

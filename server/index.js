@@ -4,14 +4,20 @@
  * 具体接口实现见 server/routes/
  */
 import express from 'express'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import cors from 'cors'
 import 'dotenv/config'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const distDir = path.resolve(__dirname, '../dist')
 
 import { pool } from './db/pool.js'
 import receivableRoutes from './routes/receivable.js'
 import { startWatcher } from './watcher.js'
 import { startScheduler } from './scheduler.js'
-import { requireLogin, isLoginEnabled, listUsernames } from './services/syncAuth.js'
+import { requireLogin, isLoginEnabled, listAccounts, ROLE_ADMIN, ROLE_LABEL } from './services/syncAuth.js'
+import { checkExposureGuard } from './services/exposureGuard.js'
 import { THROTTLE } from './services/loginThrottle.js'
 import { initSyncState, getSyncState } from './services/syncRunner.js'
 
@@ -22,6 +28,24 @@ const app = express()
 // ------------------------------------------------------------
 app.use(cors())
 app.use(express.json())
+
+// ------------------------------------------------------------
+// 静态文件服务：放在路由之前，优先匹配静态资源
+// ------------------------------------------------------------
+const isApiPath = (pathname) => pathname.startsWith('/api')
+try {
+  // 静态文件服务
+  app.use(express.static(distDir, { index: 'index.html' }))
+  // SPA fallback：非 /api 请求返回 index.html
+  app.use((req, res, next) => {
+    if (!isApiPath(req.path)) {
+      return res.sendFile(path.resolve(distDir, 'index.html'))
+    }
+    next()
+  })
+} catch (_) {
+  // dist/ 不存在时跳过（开发环境）
+}
 
 // ------------------------------------------------------------
 // 路由
@@ -38,7 +62,7 @@ app.use('/api', (req, res, next) => {
 
 app.use('/api', receivableRoutes)
 
-// 404
+// 404（API 路径 unmatched 才走这里）
 app.use('/api', (req, res) => {
   res.status(404).json({ error: `接口不存在: ${req.method} ${req.originalUrl}` })
 })
@@ -71,6 +95,32 @@ app.use((err, req, res, next) => {
 // ------------------------------------------------------------
 const PORT = process.env.PORT || 3000
 
+// ------------------------------------------------------------
+// 启动前安全闸
+//
+// 鉴权在「未配置登录账号」时是放行的（见 services/syncAuth.js 的 requireLogin）。
+// 生产环境漏填 LOGIN_USERS，会让真实经营数据以零认证状态对公网开放，
+// 所以这里宁可让它起不来。判定规则见 services/exposureGuard.js
+// ------------------------------------------------------------
+const guard = checkExposureGuard({
+  nodeEnv: process.env.NODE_ENV,
+  loginEnabled: isLoginEnabled(),
+  allowAnonymous: process.env.ALLOW_ANONYMOUS_ACCESS,
+})
+
+if (guard.level === 'fatal') {
+  console.error(`\n${'='.repeat(66)}`)
+  console.error('  启动已中止（安全闸）')
+  console.error('='.repeat(66))
+  console.error(guard.message)
+  console.error(`${'='.repeat(66)}\n`)
+  process.exit(1)
+}
+
+if (guard.level === 'warn') {
+  console.warn(`\n  [安全提醒] ${guard.message}\n`)
+}
+
 // 启动文件夹监控（自动导入），仅非生产环境默认启用，也可用 IMPORT_WATCH_ENABLED 关掉
 const watchEnabled = process.env.IMPORT_WATCH_ENABLED !== 'false'
 if (watchEnabled) {
@@ -102,15 +152,26 @@ const server = app.listen(PORT, async () => {
   }
 
   console.log(`  环境: ${process.env.NODE_ENV || 'development'}`)
-  const accounts = listUsernames()
+  const accounts = listAccounts()
   console.log(
     `  登录保护: ${
       accounts.length
-        ? `已开启（账号 ${accounts.join('、')}｜普通 ${process.env.LOGIN_TTL_HOURS || 12}h，记住我 ${process.env.LOGIN_REMEMBER_TTL_HOURS || 168}h）`
+        ? `已开启（账号 ${accounts
+            .map((a) => `${a.username}·${ROLE_LABEL[a.role] || a.role}`)
+            .join('、')}｜普通 ${process.env.LOGIN_TTL_HOURS || 12}h，记住我 ${
+            process.env.LOGIN_REMEMBER_TTL_HOURS || 168
+          }h）`
         : '未开启（任何人都可访问）'
     }`
   )
   if (accounts.length) {
+    const members = accounts.filter((a) => a.role !== ROLE_ADMIN).map((a) => a.username)
+    console.log(
+      `  账号权限: 管理员 = 全部功能；成员 = 看数据 + 导出 Excel + 改备注 / 人工提醒（同步/系统管理仍限管理员）${
+        members.length ? `（当前成员：${members.join('、')}）` : '（当前没有成员账号）'
+      }`
+    )
+    console.log(`    · 改角色只需编辑 .env 的 LOGIN_USERS=用户名=密码:角色，重启即生效（无需等令牌过期）`)
     console.log(
       `  登录限流: 同一 IP ${THROTTLE.windowMinutes} 分钟内失败 ${THROTTLE.maxFails} 次即锁定`
     )
@@ -155,6 +216,15 @@ const server = app.listen(PORT, async () => {
   console.log(`    GET /api/customer-platform-unpaid/breakdown    客户平台未回款·客户+平台`)
   console.log(`    GET /api/customer-platform-unpaid/detail       客户平台未回款·明细`)
   console.log(`    GET /api/export/customer-platform-detail       导出客户平台订单明细 Excel`)
+  console.log(
+    `\n  仅管理员可用（成员 / 其他角色调用返回 403）:
+    POST /api/sync  ·  GET /api/system-config
+    GET  /api/login-log  ·  GET /api/login-users  ·  GET /api/sync/status  ·  GET /api/sync/runs
+
+  管理员 + 成员都可用（能看数据 + 导出 Excel + 改备注 / 人工提醒）:
+    GET  /api/export/detail  ·  GET /api/export/customer-platform-detail
+    PUT  /api/detail/note  ·  PUT /api/detail/reminder`
+  )
   console.log(`\n  业务类型: billed_unpaid(已开票未回款) | shipped_uninvoiced(已发货未开票)\n`)
 })
 

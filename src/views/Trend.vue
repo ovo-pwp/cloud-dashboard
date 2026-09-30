@@ -1,9 +1,25 @@
 <template>
-  <div class="container" v-loading="loading">
-    <div class="page-header">
-      <h1 class="main-title">每日快照趋势</h1>
-      <span class="sub">每次导入一份数据后，这里会记录变化</span>
-    </div>
+  <div class="container" v-loading="loading" ref="exportEl">
+    <PageHeader title="每日快照趋势" sub="每次导入一份数据后，这里会记录变化">
+      <template #meta>
+        <!-- 这一页不跟顶栏的业务类型切换（展示全部类型），所以不能像其他页那样只标一个日期。
+             改为标出「数据范围」，避免看的人以为这里只显示了当前业务类型 -->
+        <el-tag v-if="dateRangeText" class="snapshot-tag" type="info" effect="plain">
+          数据范围 {{ dateRangeText }}
+        </el-tag>
+      </template>
+      <el-button
+        class="no-export"
+        type="primary"
+        plain
+        size="small"
+        :loading="exporting"
+        :disabled="loading || !trend.length"
+        @click="exportImage"
+      >
+        导出图片
+      </el-button>
+    </PageHeader>
 
     <el-alert
       v-if="trend.length <= 2"
@@ -59,17 +75,32 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { toPng } from 'html-to-image'
 import { storeToRefs } from 'pinia'
 import { useBizStore } from '@/stores/biz'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { getTrend, BIZ_LABEL } from '@/api'
+import PageHeader from '@/components/PageHeader.vue'
 
 const biz = useBizStore()
 const { current } = storeToRefs(biz)
 
 const loading = ref(false)
 const trend = ref([])
+const exporting = ref(false)
+const exportEl = ref(null)
+
+// 数据范围：这一页展示全部业务类型，用「最早日期 ~ 最新日期」说明覆盖到哪一天
+const dateRangeText = computed(() => {
+  const dates = trend.value.map((r) => r.snapshotDate).filter(Boolean)
+  if (!dates.length) return ''
+  const sorted = [...new Set(dates)].sort()
+  const first = sorted[0]
+  const last = sorted[sorted.length - 1]
+  return first === last ? first : `${first} ~ ${last}`
+})
 
 function fmt(v) {
   return Number(v || 0).toLocaleString('en-US', {
@@ -133,20 +164,42 @@ watch(current, () => {
   // 趋势页展示全部类型，切业务类型无需重载
 })
 
+/**
+ * 导出趋势表为 PNG。
+ * 与「数据概览」「客户平台看板」保持同一套写法：过滤 .no-export，
+ * 否则上报图片里会拍进「导出图片」这个按钮本身。
+ */
+async function exportImage() {
+  if (!exportEl.value || exporting.value) return
+  exporting.value = true
+  try {
+    const dataUrl = await toPng(exportEl.value, {
+      pixelRatio: 2,
+      backgroundColor: '#ffffff',
+      filter: (node) =>
+        !(node instanceof Element && node.classList && node.classList.contains('no-export')),
+    })
+    const a = document.createElement('a')
+    const today = new Date().toISOString().slice(0, 10)
+    a.download = `趋势_${dateRangeText.value || today}.png`
+    a.href = dataUrl
+    a.click()
+    ElMessage.success('已导出趋势图片')
+  } catch (err) {
+    console.error('[导出趋势图片] 失败:', err)
+    ElMessage.error('导出图片失败，请重试')
+  } finally {
+    exporting.value = false
+  }
+}
+
 onMounted(loadData)
 useAutoRefresh(loadData)
 </script>
 
 <style scoped>
 .container { padding: 20px; background: #fff; border-radius: 8px; }
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 16px;
-}
-.main-title { font-size: 24px; margin: 0; color: #303133; }
-.sub { font-size: 13px; color: #909399; }
+/* 头部已交给 PageHeader 组件统一 */
 .tip { margin-bottom: 16px; }
 .tip code {
   background: rgba(0, 0, 0, 0.05);
@@ -160,4 +213,23 @@ useAutoRefresh(loadData)
 .warn { color: #e6a23c; font-weight: 600; }
 .muted { color: #c0c4cc; }
 small { font-size: 11px; }
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .container { padding: 10px; }
+  /* 头部字号/间距/标签换行由 PageHeader 组件自己处理 */
+
+  .toolbar { flex-wrap: wrap; gap: 8px; }
+  .toolbar .el-select { width: 130px !important; }
+
+  .chart-wrap { height: 280px !important; }
+  .stat-row { row-gap: 10px; }
+  .stat-card { padding: 12px 10px; }
+  .stat-label { font-size: 12px; }
+  .stat-value { font-size: 18px; }
+
+  .trend-table { font-size: 11px; }
+  :deep(.trend-table th),
+  :deep(.trend-table td) { padding: 6px 4px !important; }
+}
 </style>

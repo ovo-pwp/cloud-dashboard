@@ -1,0 +1,935 @@
+{
+  "cities": [
+    {
+      "city": "崇左市",
+      "cnt": 167,
+      "amt": "1258221.75"
+    },
+    {
+      "city": "南宁市",
+      "cnt": 138,
+      "amt": "4088254.57"
+    },
+    {
+      "city": "玉林市",
+      "cnt": 64,
+      "amt": "1318339.68"
+    },
+    {
+      "city": "贵港市",
+      "cnt": 61,
+      "amt": "908341.99"
+    },
+    {
+      "city": "百色市",
+      "cnt": 60,
+      "amt": "304811.72"
+    },
+    {
+      "city": "桂林市",
+      "cnt": 60,
+      "amt": "2627217.44"
+    },
+    {
+      "city": "贺州市",
+      "cnt": 48,
+      "amt": "900419.52"
+    },
+    {
+      "city": "北海市",
+      "cnt": 32,
+      "amt": "394838.16"
+    },
+    {
+      "city": "梧州市",
+      "cnt": 26,
+      "amt": "1119929.86"
+    },
+    {
+      "city": "河池市",
+      "cnt": 22,
+      "amt": "332240.26"
+    },
+    {
+      "city": "钦州市",
+      "cnt": 20,
+      "amt": "321829.48"
+    },
+    {
+      "city": "来宾市",
+      "cnt": 18,
+      "amt": "74804.39"
+    },
+    {
+      "city": "城港市",
+      "cnt": 12,
+      "amt": "459408.76"
+    },
+    {
+      "city": "深圳市",
+      "cnt": 8,
+      "amt": "50032.00"
+    },
+    {
+      "city": "柳州市",
+      "cnt": 8,
+      "amt": "23553.92"
+    },
+    {
+      "city": "威海市",
+      "cnt": 4,
+      "amt": "6224586.48"
+    },
+    {
+      "city": "宁明县",
+      "cnt": 4,
+      "amt": "1137.04"
+    },
+    {
+      "city": "杭州市",
+      "cnt": 2,
+      "amt": "910560.00"
+    },
+    {
+      "city": "兴安县",
+      "cnt": 1,
+      "amt": "247.50"
+    }
+  ],
+  "typoRows": [
+    {
+      "customer": "个金部-赵国莹",
+      "city": "城港市",
+      "cnt": 4,
+      "amt": "70200.00"
+    },
+    {
+      "customer": "中行-防城港分行-个金部卢玉莲",
+      "city": "城港市",
+      "cnt": 4,
+      "amt": "371991.60"
+    },
+    {
+      "customer": "卡部-唐芳芳",
+      "city": "城港市",
+      "cnt": 4,
+      "amt": "17217.16"
+    }
+  ],
+  "sameCustomerCities": [
+    {
+      "customer_name": "个金部-赵国莹",
+      "city": "城港市"
+    },
+    {
+      "customer_name": "个金部-赵国莹",
+      "city": null
+    },
+    {
+      "customer_name": "中行-防城港分行-个金部卢玉莲",
+      "city": "城港市"
+    },
+    {
+      "customer_name": "中行-防城港分行-个金部卢玉莲",
+      "city": null
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": "北海市"
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": "南宁市"
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": "城港市"
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": "来宾市"
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": "桂林市"
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": "梧州市"
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": "河池市"
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": "玉林市"
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": "百色市"
+    },
+    {
+      "customer_name": "卡部-唐芳芳",
+      "city": null
+    }
+  ],
+  "zombies": [
+    {
+      "snap": "2026-09-22",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2022-04-01",
+      "docNo": "ZX-26-394",
+      "customer": "营业部公司部-钟经理",
+      "salesperson": "雷小慧",
+      "aging": "三个月以上未开票",
+      "amount": "255697.34",
+      "batchId": 110
+    },
+    {
+      "snap": "2026-09-28",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2022-04-01",
+      "docNo": "ZX-26-394",
+      "customer": "营业部公司部-钟经理",
+      "salesperson": "雷小慧",
+      "aging": "三个月以上未开票",
+      "amount": "255697.34",
+      "batchId": 131
+    },
+    {
+      "snap": "2026-09-21",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2022-04-01",
+      "docNo": "ZX-26-394",
+      "customer": "营业部公司部-钟经理",
+      "salesperson": "雷小慧",
+      "aging": "三个月以上未开票",
+      "amount": "255697.34",
+      "batchId": 106
+    },
+    {
+      "snap": "2026-09-20",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2022-04-01",
+      "docNo": "ZX-26-394",
+      "customer": "营业部公司部-钟经理",
+      "salesperson": "雷小慧",
+      "aging": "三个月以上未开票",
+      "amount": "255697.34",
+      "batchId": 90
+    },
+    {
+      "snap": "2026-09-29",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2022-04-01",
+      "docNo": "ZX-26-394",
+      "customer": "营业部公司部-钟经理",
+      "salesperson": "雷小慧",
+      "aging": "三个月以上未开票",
+      "amount": "255697.34",
+      "batchId": 145
+    },
+    {
+      "snap": "2026-09-24",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2022-04-01",
+      "docNo": "ZX-26-394",
+      "customer": "营业部公司部-钟经理",
+      "salesperson": "雷小慧",
+      "aging": "三个月以上未开票",
+      "amount": "255697.34",
+      "batchId": 127
+    },
+    {
+      "snap": "2026-09-23",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2022-04-01",
+      "docNo": "ZX-26-394",
+      "customer": "营业部公司部-钟经理",
+      "salesperson": "雷小慧",
+      "aging": "三个月以上未开票",
+      "amount": "255697.34",
+      "batchId": 117
+    },
+    {
+      "snap": "2026-09-21",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2023-12-31",
+      "docNo": "ZX-26-1296",
+      "customer": "个金部-陈蘋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "119264.86",
+      "batchId": 106
+    },
+    {
+      "snap": "2026-09-24",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2023-12-31",
+      "docNo": "ZX-26-1296",
+      "customer": "个金部-陈蘋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "119264.86",
+      "batchId": 127
+    },
+    {
+      "snap": "2026-09-23",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2023-12-31",
+      "docNo": "ZX-26-1296",
+      "customer": "个金部-陈蘋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "119264.86",
+      "batchId": 117
+    },
+    {
+      "snap": "2026-09-28",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2023-12-31",
+      "docNo": "ZX-26-1296",
+      "customer": "个金部-陈蘋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "119264.86",
+      "batchId": 131
+    },
+    {
+      "snap": "2026-09-22",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2023-12-31",
+      "docNo": "ZX-26-1296",
+      "customer": "个金部-陈蘋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "119264.86",
+      "batchId": 110
+    },
+    {
+      "snap": "2026-09-29",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2023-12-31",
+      "docNo": "ZX-26-1296",
+      "customer": "个金部-陈蘋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "119264.86",
+      "batchId": 145
+    },
+    {
+      "snap": "2026-09-20",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2023-12-31",
+      "docNo": "ZX-26-1296",
+      "customer": "个金部-陈蘋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "119264.86",
+      "batchId": 90
+    },
+    {
+      "snap": "2026-09-24",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-809",
+      "customer": "行长室-陈强",
+      "salesperson": "唐良超",
+      "aging": "三个月以上未开票",
+      "amount": "20431.12",
+      "batchId": 127
+    },
+    {
+      "snap": "2026-09-28",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-809",
+      "customer": "行长室-陈强",
+      "salesperson": "唐良超",
+      "aging": "三个月以上未开票",
+      "amount": "20431.12",
+      "batchId": 131
+    },
+    {
+      "snap": "2026-09-20",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-809",
+      "customer": "行长室-陈强",
+      "salesperson": "唐良超",
+      "aging": "三个月以上未开票",
+      "amount": "20431.12",
+      "batchId": 90
+    },
+    {
+      "snap": "2026-09-23",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-786",
+      "customer": "网金部-周涛赋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "39121.60",
+      "batchId": 117
+    },
+    {
+      "snap": "2026-09-21",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-809",
+      "customer": "行长室-陈强",
+      "salesperson": "唐良超",
+      "aging": "三个月以上未开票",
+      "amount": "20431.12",
+      "batchId": 106
+    },
+    {
+      "snap": "2026-09-29",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-786",
+      "customer": "网金部-周涛赋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "39121.60",
+      "batchId": 145
+    },
+    {
+      "snap": "2026-09-21",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-786",
+      "customer": "网金部-周涛赋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "39121.60",
+      "batchId": 106
+    },
+    {
+      "snap": "2026-09-23",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-809",
+      "customer": "行长室-陈强",
+      "salesperson": "唐良超",
+      "aging": "三个月以上未开票",
+      "amount": "20431.12",
+      "batchId": 117
+    },
+    {
+      "snap": "2026-09-22",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-809",
+      "customer": "行长室-陈强",
+      "salesperson": "唐良超",
+      "aging": "三个月以上未开票",
+      "amount": "20431.12",
+      "batchId": 110
+    },
+    {
+      "snap": "2026-09-20",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-786",
+      "customer": "网金部-周涛赋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "39121.60",
+      "batchId": 90
+    },
+    {
+      "snap": "2026-09-28",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-786",
+      "customer": "网金部-周涛赋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "39121.60",
+      "batchId": 131
+    },
+    {
+      "snap": "2026-09-22",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-786",
+      "customer": "网金部-周涛赋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "39121.60",
+      "batchId": 110
+    },
+    {
+      "snap": "2026-09-24",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-786",
+      "customer": "网金部-周涛赋",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "39121.60",
+      "batchId": 127
+    },
+    {
+      "snap": "2026-09-29",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-04-01",
+      "docNo": "ZX-26-809",
+      "customer": "行长室-陈强",
+      "salesperson": "唐良超",
+      "aging": "三个月以上未开票",
+      "amount": "20431.12",
+      "batchId": 145
+    },
+    {
+      "snap": "2026-09-28",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1290",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "7112.77",
+      "batchId": 131
+    },
+    {
+      "snap": "2026-09-28",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1291",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "22070.59",
+      "batchId": 131
+    },
+    {
+      "snap": "2026-09-28",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1292",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "3407.04",
+      "batchId": 131
+    },
+    {
+      "snap": "2026-09-29",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1223",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1534.00",
+      "batchId": 145
+    },
+    {
+      "snap": "2026-09-29",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1224",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1050.00",
+      "batchId": 145
+    },
+    {
+      "snap": "2026-09-29",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1290",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "7112.77",
+      "batchId": 145
+    },
+    {
+      "snap": "2026-09-29",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1291",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "22070.59",
+      "batchId": 145
+    },
+    {
+      "snap": "2026-09-29",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1292",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "3407.04",
+      "batchId": 145
+    },
+    {
+      "snap": "2026-09-23",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1223",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1534.00",
+      "batchId": 117
+    },
+    {
+      "snap": "2026-09-23",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1224",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1050.00",
+      "batchId": 117
+    },
+    {
+      "snap": "2026-09-23",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1290",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "7112.77",
+      "batchId": 117
+    },
+    {
+      "snap": "2026-09-23",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1291",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "22070.59",
+      "batchId": 117
+    },
+    {
+      "snap": "2026-09-20",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1223",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1534.00",
+      "batchId": 90
+    },
+    {
+      "snap": "2026-09-20",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1224",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1050.00",
+      "batchId": 90
+    },
+    {
+      "snap": "2026-09-20",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1290",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "7112.77",
+      "batchId": 90
+    },
+    {
+      "snap": "2026-09-20",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1291",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "22070.59",
+      "batchId": 90
+    },
+    {
+      "snap": "2026-09-20",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1292",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "3407.04",
+      "batchId": 90
+    },
+    {
+      "snap": "2026-09-21",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1223",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1534.00",
+      "batchId": 106
+    },
+    {
+      "snap": "2026-09-21",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1224",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1050.00",
+      "batchId": 106
+    },
+    {
+      "snap": "2026-09-21",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1291",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "22070.59",
+      "batchId": 106
+    },
+    {
+      "snap": "2026-09-21",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1292",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "3407.04",
+      "batchId": 106
+    },
+    {
+      "snap": "2026-09-21",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1290",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "7112.77",
+      "batchId": 106
+    },
+    {
+      "snap": "2026-09-22",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1223",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1534.00",
+      "batchId": 110
+    },
+    {
+      "snap": "2026-09-22",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1224",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1050.00",
+      "batchId": 110
+    },
+    {
+      "snap": "2026-09-22",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1290",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "7112.77",
+      "batchId": 110
+    },
+    {
+      "snap": "2026-09-22",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1291",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "22070.59",
+      "batchId": 110
+    },
+    {
+      "snap": "2026-09-22",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1292",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "3407.04",
+      "batchId": 110
+    },
+    {
+      "snap": "2026-09-23",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1292",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "3407.04",
+      "batchId": 117
+    },
+    {
+      "snap": "2026-09-24",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1223",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1534.00",
+      "batchId": 127
+    },
+    {
+      "snap": "2026-09-24",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1224",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1050.00",
+      "batchId": 127
+    },
+    {
+      "snap": "2026-09-24",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1291",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "22070.59",
+      "batchId": 127
+    },
+    {
+      "snap": "2026-09-24",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1292",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "3407.04",
+      "batchId": 127
+    },
+    {
+      "snap": "2026-09-24",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1290",
+      "customer": "个金部-赵国莹",
+      "salesperson": "农立珍",
+      "aging": "三个月以上未开票",
+      "amount": "7112.77",
+      "batchId": 127
+    },
+    {
+      "snap": "2026-09-28",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1223",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1534.00",
+      "batchId": 131
+    },
+    {
+      "snap": "2026-09-28",
+      "biz": "shipped_uninvoiced",
+      "docDate": "2024-12-31",
+      "docNo": "ZX-26-1224",
+      "customer": "办公室农忠奇",
+      "salesperson": "大客户中心",
+      "aging": "三个月以上未开票",
+      "amount": "1050.00",
+      "batchId": 131
+    }
+  ],
+  "zombieBatches": [
+    {
+      "id": 90,
+      "biz_type": "shipped_uninvoiced",
+      "snap": "2026-09-20",
+      "created": "2026-09-20 18:30:17.365424+08"
+    },
+    {
+      "id": 106,
+      "biz_type": "shipped_uninvoiced",
+      "snap": "2026-09-21",
+      "created": "2026-09-21 18:40:19.230828+08"
+    },
+    {
+      "id": 110,
+      "biz_type": "shipped_uninvoiced",
+      "snap": "2026-09-22",
+      "created": "2026-09-22 19:49:29.864611+08"
+    },
+    {
+      "id": 117,
+      "biz_type": "shipped_uninvoiced",
+      "snap": "2026-09-23",
+      "created": "2026-09-23 18:55:51.784664+08"
+    },
+    {
+      "id": 127,
+      "biz_type": "shipped_uninvoiced",
+      "snap": "2026-09-24",
+      "created": "2026-09-24 18:00:32.730385+08"
+    },
+    {
+      "id": 131,
+      "biz_type": "shipped_uninvoiced",
+      "snap": "2026-09-28",
+      "created": "2026-09-28 19:09:18.317536+08"
+    },
+    {
+      "id": 145,
+      "biz_type": "shipped_uninvoiced",
+      "snap": "2026-09-29",
+      "created": "2026-09-29 17:59:05.069579+08"
+    }
+  ],
+  "latestBatches": [
+    {
+      "id": 144,
+      "biz_type": "billed_unpaid",
+      "snap": "2026-09-29"
+    },
+    {
+      "id": 145,
+      "biz_type": "shipped_uninvoiced",
+      "snap": "2026-09-29"
+    }
+  ],
+  "zombiesInLatest": [
+    {
+      "biz": "shipped_uninvoiced",
+      "cnt": 9,
+      "amt": "469689.32"
+    }
+  ]
+}

@@ -14,6 +14,9 @@ request.interceptors.request.use((config) => {
   try {
     const token = localStorage.getItem('cloud-dashboard:auth-token') || ''
     if (token) config.headers['X-Auth-Token'] = token
+    // 记下本次请求是否真的带了令牌：
+    // 用来区分「令牌过期」和「压根还没登录」，后者不该弹「已过期」
+    config.__sentToken = !!token
   } catch {
     /* 忽略 */
   }
@@ -63,7 +66,11 @@ request.interceptors.response.use(
       }
       if (!redirecting) {
         redirecting = true
-        ElMessage.warning('登录已过期，请重新登录')
+        // 只有「带着令牌却被拒」才算过期；没带令牌只是还没登录，
+        // 这时弹「登录已过期」会让人以为账号出了问题
+        if (error.config?.__sentToken) {
+          ElMessage.warning('登录已过期，请重新登录')
+        }
         onUnauthorized?.()
         setTimeout(() => {
           redirecting = false

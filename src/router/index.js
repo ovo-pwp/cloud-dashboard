@@ -21,10 +21,24 @@ const routes = [
         meta: { title: '首页' },
       },
       {
+        path: 'system-hub',
+        name: 'SystemHub',
+        component: () => import('@/views/SystemHub.vue'),
+        meta: { title: '总系统' },
+      },
+      {
+        path: 'my-performance',
+        name: 'MyPerformance',
+        component: () => import('@/views/MyPerformance.vue'),
+        meta: { title: '我的业绩' },
+      },
+      {
+        // roles 是「进这一页需要什么角色」。不在列表里的一律会被守卫挡回首页，
+        // 菜单里也会隐藏（前端隐藏只是体验，真正的拦截在后端 requireRole）
         path: 'system',
         name: 'System',
         component: () => import('@/views/System.vue'),
-        meta: { title: '系统管理' },
+        meta: { title: '系统管理', roles: ['admin'] },
       },
       {
         path: 'home',
@@ -37,12 +51,6 @@ const routes = [
         name: 'Detail',
         component: () => import('@/views/Detail.vue'),
         meta: { title: '明细查询' },
-      },
-      {
-        path: 'by-customer',
-        name: 'ByCustomer',
-        component: () => import('@/views/ByCustomer.vue'),
-        meta: { title: '按客户汇总' },
       },
       {
         path: 'trend',
@@ -62,6 +70,14 @@ const routes = [
         component: () => import('@/views/CustomerPlatformDetail.vue'),
         meta: { title: '客户平台订单明细' },
       },
+      {
+        // 「待处理优先级清单」是独立新增页（2026-09-29），
+        // 不改动任何既有页面；数据来自只读接口 /api/priority/actions
+        path: 'priority-actions',
+        name: 'PriorityActions',
+        component: () => import('@/views/PriorityActions.vue'),
+        meta: { title: '待处理优先级清单' },
+      },
     ],
   },
 ]
@@ -72,10 +88,11 @@ const router = createRouter({
 })
 
 // ------------------------------------------------------------
-// 全局路由守卫：未登录一律拦到登录页
+// 全局路由守卫：未登录一律拦到登录页；角色不够的页面挡回首页
 // ------------------------------------------------------------
-// 缓存一次"登录是否已开启"，避免每次跳转都请求后端
+// 缓存一次"登录是否已开启"与当前角色，避免每次跳转都请求后端
 let loginEnabledCache = null
+let roleCache = null
 
 router.beforeEach(async (to) => {
   document.title = to.meta.title ? `${to.meta.title} · 云端看板` : '云端看板'
@@ -94,6 +111,7 @@ router.beforeEach(async (to) => {
     try {
       const me = await getMe()
       loginEnabledCache = !!me.loginEnabled
+      roleCache = me.role || null
       // 后端未启用登录保护，本地令牌无意义，清掉继续
       if (!me.loginEnabled) return true
       if (!me.loggedIn) {
@@ -103,6 +121,13 @@ router.beforeEach(async (to) => {
       // 校验失败（网络/未登录）交给登录页处理
       return { path: '/login', query: { redirect: to.fullPath } }
     }
+  }
+
+  // 角色不够的页面挡回首页，并带上 denied 让布局给出明确原因
+  // （前端拦截只是体验，真正的拦截在后端 requireRole）
+  const need = to.meta.roles
+  if (need && need.length && !need.includes(roleCache)) {
+    return { path: '/homepage', query: { denied: to.meta.title || to.path } }
   }
 
   return true

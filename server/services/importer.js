@@ -7,6 +7,7 @@
  */
 
 import XLSX from 'xlsx'
+import { todayDate, toDateOnly } from '../utils/date.js'
 
 const BIZ_TYPES = {
   billed_unpaid: {
@@ -92,7 +93,7 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
   const meta = BIZ_TYPES[bizType]
   if (!meta) throw new Error(`未知业务类型: ${bizType}`)
 
-  const snapshot = snapshotDate || new Date().toISOString().slice(0, 10)
+  const snapshot = snapshotDate || todayDate()
 
   // ---------- 读取 ----------
   const wb = XLSX.readFile(xlsxPath, { cellDates: false })
@@ -136,13 +137,14 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
     let docDate = null
     const rawDate = r[1]
     if (rawDate instanceof Date) {
-      docDate = rawDate.toISOString().slice(0, 10)
+      docDate = toDateOnly(rawDate)
     } else if (typeof rawDate === 'number') {
       docDate = excelSerialToDate(rawDate)
     } else if (rawDate) {
-      const s = String(rawDate).trim().replace(/\//g, '-')
-      const d = new Date(s)
-      docDate = Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10)
+      // 走 toDateOnly 而不是 new Date(...).toISOString()：
+      // 源里若有 '2026/9/21' 这种不补零的斜杠日期，new Date 会按本地零点解析，
+      // toISOString 再换算成 UTC 就会少一天
+      docDate = toDateOnly(String(rawDate).trim())
     }
 
     // ---------- 质量问题：登记为告警，但一律保留入库 ----------
@@ -190,6 +192,8 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
       amount_1m: amount1m,
       amount_current: amountCurrent,
       follow_up_note: toText(r[12]),
+      // 第 14 列 = 源表新增的「地址」（城市名）。未开票那张表没有这列，取到就是 null
+      city: toText(r[13]) || null,
       data_warning: dataWarning,
     })
   }
@@ -227,6 +231,7 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
       'customer_name', 'permission_raw', 'salesperson_raw', 'department',
       'salesperson', 'amount_total', 'amount_over3m', 'amount_3m',
       'amount_2m', 'amount_1m', 'amount_current', 'follow_up_note', 'data_warning',
+      'city',
     ]
     const placeholders = cols.map((_, idx) => `$${idx + 1}`).join(',')
 
@@ -279,7 +284,7 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
 //   17 自检  18 差异调整  19 报账方案编号  20 挂账客户  21 业务员  22 备注
 // ------------------------------------------------------------
 export async function importCustomerPlatformUnpaid(pool, { xlsxPath, snapshotDate }) {
-  const snapshot = snapshotDate || new Date().toISOString().slice(0, 10)
+  const snapshot = snapshotDate || todayDate()
 
   const wb = XLSX.readFile(xlsxPath, { cellDates: false })
   const sheetName = wb.SheetNames[0]
@@ -304,12 +309,10 @@ export async function importCustomerPlatformUnpaid(pool, { xlsxPath, snapshotDat
 
   // 日期列：可能为 Date / Excel 序列 / 字符串
   function toDate(v) {
-    if (v instanceof Date) return v.toISOString().slice(0, 10)
+    if (v instanceof Date) return toDateOnly(v)
     if (typeof v === 'number') return excelSerialToDate(v)
     if (!v) return null
-    const s = String(v).trim().replace(/\//g, '-')
-    const d = new Date(s)
-    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10)
+    return toDateOnly(String(v).trim())
   }
 
   for (let i = 0; i < dataRows.length; i++) {
@@ -324,7 +327,9 @@ export async function importCustomerPlatformUnpaid(pool, { xlsxPath, snapshotDat
     }
 
     const salesAmountTotal = toNumber(at(r, '销售金额合计'))
-    sumTotal += salesAmountTotal
+    // 口径对齐看板：累加「销售金额」（= 销售单价 × 数量），不用「销售金额合计」
+    // （后者是导单销售金额，通常大 3 倍，会让重复批检测的金额比对失效）
+    sumTotal += toNumber(at(r, '销售金额'))
 
     records.push({
       platform: col(at(r, '下单平台')),
@@ -354,6 +359,60 @@ export async function importCustomerPlatformUnpaid(pool, { xlsxPath, snapshotDat
   }
 
   const grandTotal = Math.round(sumTotal * 100) / 100
+
+  // ---------- 重复批检测（2026-09-29 新增）----------
+  // 源表《客户未回款》按周出数，但同步每天跑，于是库里会出现内容完全相同的连续快照
+  // （实测 09-24 与 09-28 两批的行数/金额/最早最晚订单日期逐项一致）。
+  // 这种批入库后，「较上期」恒为 0.0%，看板失去意义，而且会把真正的上期挤掉。
+  //
+  // 判定：取比本次快照更早的最近一批，比较「行数 + 销售金额 + 订单日期范围」，
+  // 三者全等即视为重复，**不写入本次快照**（相当于这次抓取白跑，源表没更新）。
+  // 用订单日期范围而不是逐行 diff：前者一次查询就能拿到，且对「同数据不同顺序」也成立。
+  if (records.length > 0) {
+    const early = await pool.connect()
+    try {
+      const { rows: dup } = await early.query(
+        `SELECT snapshot_date,
+                COUNT(*)                          AS n,
+                ROUND(SUM(sales_amount)::numeric, 2) AS amt,
+                MIN(order_date)                   AS eo,
+                MAX(order_date)                   AS lo
+           FROM customer_platform_unpaid
+          WHERE snapshot_date < $1::date
+          GROUP BY snapshot_date
+          ORDER BY snapshot_date DESC
+          LIMIT 1`,
+        [snapshot]
+      )
+      const prev = dup[0]
+      if (prev) {
+        const sameCount = Number(prev.n) === records.length
+        const sameAmount = Math.abs(Number(prev.amt) - grandTotal) <= 0.03
+        const dates = records.map((r) => r.order_date).filter(Boolean).sort()
+        const myEo = dates[0] || null
+        const myLo = dates[dates.length - 1] || null
+        const pEo = prev.eo ? toDateOnly(prev.eo) : null
+        const pLo = prev.lo ? toDateOnly(prev.lo) : null
+        const sameRange = myEo === pEo && myLo === pLo
+
+        if (sameCount && sameAmount && sameRange) {
+          console.log(
+            `[import] 跳过重复批 ${snapshot}：与 ${toDateOnly(prev.snapshot_date)} 内容完全相同` +
+            `（${records.length} 行 / ${grandTotal} / ${myEo}~${myLo}），源表未更新`
+          )
+          return {
+            inserted: 0,
+            skippedCount: skipped.length,
+            totalAmount: grandTotal,
+            skipped,
+            duplicateOf: toDateOnly(prev.snapshot_date),
+          }
+        }
+      }
+    } finally {
+      early.release()
+    }
+  }
 
   // 入库（事务，同日覆盖）
   const client = await pool.connect()

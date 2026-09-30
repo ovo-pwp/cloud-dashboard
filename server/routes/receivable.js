@@ -4,6 +4,7 @@
  */
 import { Router } from 'express'
 import { query, normalizeDate } from '../db/pool.js'
+import { toDateOnly } from '../utils/date.js'
 import {
   startSync,
   getSyncState,
@@ -11,12 +12,16 @@ import {
   listSyncRuns,
 } from '../services/syncRunner.js'
 import {
-  requireSyncAuth,
+  requireRole,
   isLoginEnabled,
-  listUsernames,
+  listAccounts,
   verifyLogin,
   issueLoginToken,
   verifyLoginToken,
+  ROLE_ADMIN,
+  CAN_EXPORT,
+  CAN_EDIT_DETAIL,
+  ROLE_LABEL,
   LOGIN_TTL,
   REMEMBER_TTL,
 } from '../services/syncAuth.js'
@@ -123,6 +128,8 @@ router.post('/login', async (req, res) => {
     loginEnabled: true,
     token,
     username: name,
+    role: result.role,
+    roleLabel: ROLE_LABEL[result.role] || result.role,
     remember: remembered,
     ttlHours: remembered ? REMEMBER_TTL : LOGIN_TTL,
   })
@@ -130,7 +137,13 @@ router.post('/login', async (req, res) => {
 
 router.get('/me', (req, res) => {
   if (!isLoginEnabled()) {
-    return res.json({ loginEnabled: false, loggedIn: true, username: '匿名' })
+    return res.json({
+      loginEnabled: false,
+      loggedIn: true,
+      username: '匿名',
+      role: ROLE_ADMIN,
+      roleLabel: ROLE_LABEL[ROLE_ADMIN],
+    })
   }
   const payload = verifyLoginToken(
     req.get('X-Auth-Token') || req.query.authToken || ''
@@ -142,6 +155,8 @@ router.get('/me', (req, res) => {
     loginEnabled: true,
     loggedIn: true,
     username: payload.user,
+    role: payload.role,
+    roleLabel: ROLE_LABEL[payload.role] || payload.role,
     remember: !!payload.remember,
     ttlHours: payload.remember ? REMEMBER_TTL : LOGIN_TTL,
     expireAt: payload.exp ? new Date(payload.exp).toISOString() : null,
@@ -161,8 +176,10 @@ router.post('/logout', async (req, res) => {
 // 登录记录（谁在什么时候从哪里登录了平台）
 //   GET /api/login-log  分页 + 可按账号/结果/时间范围过滤
 //   GET /api/login-users  当前配置了哪些账号（不含密码）
+//
+// 两者都含 IP / 浏览器指纹 / 账号清单，只给管理员看。
 // ------------------------------------------------------------
-router.get('/login-log', async (req, res, next) => {
+router.get('/login-log', requireRole(ROLE_ADMIN), async (req, res, next) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1)
     const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 20))
@@ -227,15 +244,15 @@ router.get('/login-log', async (req, res, next) => {
         createdAt: r.created_at,
       })),
       stats: stat[0],
-      accounts: listUsernames(),
+      accounts: listAccounts(),
     })
   } catch (err) {
     next(err)
   }
 })
 
-router.get('/login-users', (req, res) => {
-  res.json({ accounts: listUsernames() })
+router.get('/login-users', requireRole(ROLE_ADMIN), (req, res) => {
+  res.json({ accounts: listAccounts() })
 })
 
 const BIZ_TYPES = {
@@ -263,6 +280,57 @@ async function getLatestBatch(bizType) {
     [bizType]
   )
   return rows[0] || null
+}
+
+/**
+ * 取「上一个可用批次」（比 latestSnapshotDate 更早的最近一个批次）。
+ *
+ * 为什么不直接 ORDER BY snapshot_date DESC LIMIT 1 OFFSET 1：
+ *   调用方已经拿到了最新批，这里按「快照日期严格小于最新批」来取，
+ *   语义更明确，也不会因为同一天有两个批次而取错。
+ *
+ * 为什么不用「昨天」：
+ *   同步不是每天都跑（实测 09-24 之后直接跳到 09-28），
+ *   按「昨天」找会大面积取不到，卡片上就一直显示不出对比。
+ *   所以取「上一个真实存在数据的批次」，并在界面上**写明是哪一天**，
+ *   让人自己判断这个对比的间隔有多远。
+ */
+async function getPrevBatch(bizType, latestSnapshotDate) {
+  if (!latestSnapshotDate) return null
+  const { rows } = await query(
+    `SELECT id,
+            biz_type,
+            to_char(snapshot_date, 'YYYY-MM-DD') AS snapshot_date,
+            row_count, total_amount, skipped_count, source_file,
+            imported_at
+       FROM import_batch
+      WHERE biz_type = $1
+        AND snapshot_date < $2::date
+      ORDER BY snapshot_date DESC, id DESC LIMIT 1`,
+    [bizType, latestSnapshotDate]
+  )
+  return rows[0] || null
+}
+
+/**
+ * 「总额 / 3个月以上 / 单据数 / 涉及业务员」四个指标的聚合 SQL。
+ * 抽出来是因为 /summary 要对「最新批」和「上一个批」各跑一遍 ——
+ * 两边必须用**完全相同**的口径，否则算出来的涨跌是假的。
+ */
+function summaryAggSql() {
+  return `
+    SELECT
+      COUNT(*)                                 AS doc_count,
+      COUNT(DISTINCT customer_name)            AS customer_count,
+      COUNT(DISTINCT salesperson)              AS salesperson_count,
+      COALESCE(SUM(amount_total), 0)           AS total,
+      COALESCE(SUM(amount_over3m), 0)          AS over3m,
+      COALESCE(SUM(amount_3m), 0)              AS m3,
+      COALESCE(SUM(amount_2m), 0)              AS m2,
+      COALESCE(SUM(amount_1m), 0)              AS m1,
+      COALESCE(SUM(amount_current), 0)         AS current_month,
+      COUNT(*) FILTER (WHERE data_warning IS NOT NULL) AS warn_count
+    FROM receivable_detail WHERE `
 }
 
 /** 金额转数字（pg numeric 返回字符串） */
@@ -340,23 +408,49 @@ router.get('/summary', async (req, res, next) => {
       })
     }
 
-    const { rows } = await query(
-      `SELECT
-         COUNT(*)                                 AS doc_count,
-         COUNT(DISTINCT customer_name)            AS customer_count,
-         COUNT(DISTINCT salesperson)              AS salesperson_count,
-         COALESCE(SUM(amount_total), 0)           AS total,
-         COALESCE(SUM(amount_over3m), 0)          AS over3m,
-         COALESCE(SUM(amount_3m), 0)              AS m3,
-         COALESCE(SUM(amount_2m), 0)              AS m2,
-         COALESCE(SUM(amount_1m), 0)              AS m1,
-         COALESCE(SUM(amount_current), 0)         AS current_month,
-         COUNT(*) FILTER (WHERE data_warning IS NOT NULL) AS warn_count
-       FROM receivable_detail WHERE batch_id = $1`,
-      [batch.id]
-    )
+    // 可选按业务员过滤：给「我的业绩」页取某人自己的合计用。
+    // 不传 = 全量（数据概览页的调用方式），行为与以前完全一致
+    const salesperson = String(req.query.salesperson || '').trim()
+    const params = [batch.id]
+    let where = 'batch_id = $1'
+    if (salesperson) {
+      params.push(salesperson)
+      where += ` AND salesperson = $${params.length}`
+    }
+
+    const { rows } = await query(summaryAggSql() + where, params)
 
     const r = nums(rows[0])
+
+    // ---- 上期对比（2026-09-29 新增）----
+    // 口径要点：
+    //   1) 与本期用**同一个 where**（同一业务员过滤），否则「个人 vs 全公司」没有意义
+    //   2) 取「上一个可用批次」而不是「昨天」——同步不是每天都有
+    //   3) 取不到上期就返回 prev:null，前端整块不渲染，**不写死 0、不显示 0.0%**
+    //      （0.0% 会让人误以为「和上次一模一样」，而实际是「没有可比数据」）
+    const prevBatch = await getPrevBatch(bizType, batch.snapshot_date)
+    let prev = null
+    if (prevBatch) {
+      const prevParams = [prevBatch.id]
+      let prevWhere = 'batch_id = $1'
+      if (salesperson) {
+        prevParams.push(salesperson)
+        prevWhere += ` AND salesperson = $${prevParams.length}`
+      }
+      const prevRes = await query(summaryAggSql() + prevWhere, prevParams)
+      const p = nums(prevRes.rows[0])
+      prev = {
+        snapshotDate: prevBatch.snapshot_date,
+        total: p.total,
+        over3m: p.over3m,
+        invoiceCount: p.doc_count,
+        customerCount: p.customer_count,
+        salespersonCount: p.salesperson_count,
+        // 单均金额 = 总额 ÷ 单据数（与前端 avg 算法一致），单据数为 0 时给 null
+        avgAmount: p.doc_count > 0 ? p.total / p.doc_count : null,
+      }
+    }
+
     res.json({
       hasData: true,
       bizType,
@@ -374,6 +468,9 @@ router.get('/summary', async (req, res, next) => {
       over3mRatio: r.total > 0 ? r.over3m / r.total : 0,
       warnCount: r.warn_count,
       skippedCount: Number(batch.skipped_count),
+      /** 单均金额放后端算，保证「本期」和「上期」用同一个公式 */
+      avgAmount: r.doc_count > 0 ? r.total / r.doc_count : null,
+      prev,
     })
   } catch (err) {
     next(err)
@@ -393,7 +490,7 @@ router.get('/aging-by-salesperson', async (req, res, next) => {
       `SELECT
          salesperson,
          department,
-         COUNT(*)                       AS "docCount",
+         COUNT(*)::int                  AS "docCount",
          SUM(amount_over3m)::float8     AS "over3m",
          SUM(amount_3m)::float8         AS "m3",
          SUM(amount_2m)::float8         AS "m2",
@@ -426,7 +523,7 @@ router.get('/aging-summary', async (req, res, next) => {
     const { rows } = await query(
       `SELECT
          COALESCE(aging_category, '未分类') AS "category",
-         COUNT(*)                           AS "docCount",
+         COUNT(*)::int                      AS "docCount",
          SUM(amount_total)::float8          AS "total"
        FROM receivable_detail
       WHERE batch_id = $1
@@ -446,7 +543,7 @@ router.get('/aging-summary', async (req, res, next) => {
 //   抽出来是为了防止两处逻辑漂移：导出结果必须与页面所见完全一致
 // ------------------------------------------------------------
 function buildDetailFilter(req, batchId) {
-  const { salesperson, customer, agingCategory, keyword } = req.query
+  const { salesperson, customer, agingCategory, keyword, city } = req.query
   const from = normalizeDate(req.query.from)
   const to = normalizeDate(req.query.to)
 
@@ -460,6 +557,10 @@ function buildDetailFilter(req, batchId) {
   if (customer) {
     params.push(customer)
     conditions.push(`customer_name = $${params.length}`)
+  }
+  if (city) {
+    params.push(city)
+    conditions.push(`city = $${params.length}`)
   }
   if (agingCategory) {
     if (agingCategory === '未分类') {
@@ -505,6 +606,7 @@ const DETAIL_EXPORT_COLUMNS = [
   { key: 'agingCategory', label: '账龄' },
   { key: 'customer', label: '挂账客户' },
   { key: 'salesperson', label: '业务员' },
+  { key: 'city', label: '城市' },
   { key: 'amountTotal', label: '金额(元)', money: true },
   { key: 'over3m', label: '3个月以上', money: true },
   { key: 'm3', label: '3个月', money: true },
@@ -512,6 +614,7 @@ const DETAIL_EXPORT_COLUMNS = [
   { key: 'm1', label: '1个月', money: true },
   { key: 'currentMonth', label: '当月', money: true },
   { key: 'note', label: '备注' },
+  { key: 'reminder', label: '人工提醒' },
   { key: 'warning', label: '提醒' },
 ]
 
@@ -522,6 +625,7 @@ const DETAIL_EXPORT_SELECT = `
   COALESCE(aging_category, '未分类')  AS "agingCategory",
   customer_name                       AS "customer",
   salesperson,
+  city,
   amount_total::float8                AS "amountTotal",
   amount_over3m::float8               AS "over3m",
   amount_3m::float8                   AS "m3",
@@ -529,6 +633,7 @@ const DETAIL_EXPORT_SELECT = `
   amount_1m::float8                   AS "m1",
   amount_current::float8              AS "currentMonth",
   follow_up_note                      AS "note",
+  manual_reminder                     AS "reminder",
   data_warning                        AS "warning"
 `
 
@@ -556,12 +661,28 @@ router.get('/detail', async (req, res, next) => {
     const sortDir = String(req.query.sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC'
 
     const countRes = await query(
-      `SELECT COUNT(*) AS cnt, COALESCE(SUM(amount_total),0) AS total
+      `SELECT COUNT(*)           AS cnt,
+              COALESCE(SUM(amount_total),  0) AS total,
+              COALESCE(SUM(amount_over3m), 0) AS over3m,
+              COALESCE(SUM(amount_3m),     0) AS m3,
+              COALESCE(SUM(amount_2m),     0) AS m2,
+              COALESCE(SUM(amount_1m),     0) AS m1,
+              COALESCE(SUM(amount_current),0) AS current_month
          FROM receivable_detail WHERE ${where}`,
       params
     )
     const count = Number(countRes.rows[0].cnt)
     const sumTotal = Number(countRes.rows[0].total)
+    // 全量分列合计：表尾用它，保证「筛选全量」与「表尾」是同一个口径，
+    // 不再出现同一屏两个不同的合计数字
+    const sumColumns = {
+      amountTotal: Number(countRes.rows[0].total),
+      over3m: Number(countRes.rows[0].over3m),
+      m3: Number(countRes.rows[0].m3),
+      m2: Number(countRes.rows[0].m2),
+      m1: Number(countRes.rows[0].m1),
+      currentMonth: Number(countRes.rows[0].current_month),
+    }
 
     const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 500)
     const currentPage = Math.max(Number(page) || 1, 1)
@@ -578,6 +699,7 @@ router.get('/detail', async (req, res, next) => {
          permission_raw                      AS "permission",
          salesperson,
          department,
+         city,
          amount_total::float8                AS "amountTotal",
          amount_over3m::float8               AS "over3m",
          amount_3m::float8                   AS "m3",
@@ -585,6 +707,7 @@ router.get('/detail', async (req, res, next) => {
          amount_1m::float8                   AS "m1",
          amount_current::float8              AS "currentMonth",
          follow_up_note                      AS "note",
+         manual_reminder                     AS "reminder",
          data_warning                        AS "warning"
        FROM receivable_detail
       WHERE ${where}
@@ -597,6 +720,7 @@ router.get('/detail', async (req, res, next) => {
       records: rows,
       total: count,
       sumTotal,
+      sumColumns,
       page: currentPage,
       pageSize: limit,
       totalPages: Math.ceil(count / limit),
@@ -609,10 +733,65 @@ router.get('/detail', async (req, res, next) => {
 })
 
 // ------------------------------------------------------------
+// PUT /api/detail/note      修改某条明细的备注
+// PUT /api/detail/reminder  修改某条明细的人工提醒
+//
+//   两个字段都是「人写的一句话」，落库逻辑完全一样（校验 id → UPDATE → 回写），
+//   所以抽成 makeTextUpdater：只有列名、请求字段、字数上限四处不同。
+//   不抽的话，第二处必然是复制粘贴改一改 —— 以后改校验规则就会漏掉一边。
+//
+//   权限：管理员与成员都能改（一线同事追款时最需要写这两句），后端是真正防线。
+//   注意「提醒」与 data_warning 是**两个字段**：前者人写、后者系统自动检测，
+//   混在一起会被同步覆盖，故分开存（接口返回的 reminder 与 warning 也是分开的）。
+// ------------------------------------------------------------
+function makeTextUpdater({ column, field, label, maxLen }) {
+  return async (req, res, next) => {
+    try {
+      const id = Number(req.body?.id)
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: '缺少有效的明细 id' })
+      }
+      const text = typeof req.body?.[field] === 'string' ? req.body[field] : ''
+      if (text.length > maxLen) {
+        return res.status(400).json({ error: `${label}内容过长（最多 ${maxLen} 字）` })
+      }
+
+      const value = text.trim() ? text : null
+      const { rowCount } = await query(
+        `UPDATE receivable_detail SET ${column} = $2 WHERE id = $1`,
+        [id, value]
+      )
+      if (rowCount === 0) {
+        return res.status(404).json({ error: '未找到该明细记录' })
+      }
+      res.json({ ok: true, id, [field]: value })
+    } catch (err) {
+      next(err)
+    }
+  }
+}
+
+router.put(
+  '/detail/note',
+  requireRole(...CAN_EDIT_DETAIL),
+  makeTextUpdater({ column: 'follow_up_note', field: 'note', label: '备注', maxLen: 2000 })
+)
+
+router.put(
+  '/detail/reminder',
+  requireRole(...CAN_EDIT_DETAIL),
+  makeTextUpdater({ column: 'manual_reminder', field: 'reminder', label: '提醒', maxLen: 500 })
+)
+
+// ------------------------------------------------------------
 // GET /api/export/detail  导出台账明细（当前筛选条件下的**全部**行）
 //   筛选条件与 /detail 完全共用，保证导出结果 = 页面所见
+//
+//   导出是日常动作（对账、发给客户），管理员与成员都能做；
+//   真正限管理员的是「同步数据」和「系统管理」。
+//   要收回去，把下面的 CAN_EXPORT 换成 ROLE_ADMIN 即可，页面按钮同步改回 isAdmin。
 // ------------------------------------------------------------
-router.get('/export/detail', async (req, res, next) => {
+router.get('/export/detail', requireRole(...CAN_EXPORT), async (req, res, next) => {
   try {
     const bizType = resolveBizType(req)
     const batch = await getLatestBatch(bizType)
@@ -655,7 +834,7 @@ router.get('/export/detail', async (req, res, next) => {
       sheetName: label.slice(0, 28),
     })
 
-    const snapshot = new Date(batch.snapshot_date).toISOString().slice(0, 10)
+    const snapshot = toDateOnly(batch.snapshot_date)
     sendXlsx(res, buffer, safeFilename(`${label}明细_${snapshot}_${count}行.xlsx`))
   } catch (err) {
     next(err)
@@ -675,7 +854,7 @@ router.get('/by-customer', async (req, res, next) => {
     const { rows } = await query(
       `SELECT
          customer_name                    AS "customer",
-         COUNT(*)                         AS "docCount",
+         COUNT(*)::int                    AS "docCount",
          SUM(amount_total)::float8        AS "total",
          SUM(amount_over3m)::float8       AS "over3m",
          string_agg(DISTINCT salesperson, '、') AS "salespersons"
@@ -700,10 +879,10 @@ router.get('/filters', async (req, res, next) => {
     const bizType = resolveBizType(req)
     const batch = await getLatestBatch(bizType)
     if (!batch) {
-      return res.json({ salespeople: [], customers: [], agingCategories: [], bizType })
+      return res.json({ salespeople: [], customers: [], agingCategories: [], cities: [], bizType })
     }
 
-    const [sp, cu, ag] = await Promise.all([
+    const [sp, cu, ag, ct] = await Promise.all([
       query(
         `SELECT DISTINCT salesperson, department FROM receivable_detail
           WHERE batch_id = $1 ORDER BY salesperson`,
@@ -719,6 +898,12 @@ router.get('/filters', async (req, res, next) => {
           WHERE batch_id = $1 ORDER BY cat`,
         [batch.id]
       ),
+      // 城市：只有「已开票未回款」那张源表有这列，未开票取到会全是 NULL
+      query(
+        `SELECT DISTINCT city FROM receivable_detail
+          WHERE batch_id = $1 AND city IS NOT NULL AND city <> '' ORDER BY city`,
+        [batch.id]
+      ),
     ])
 
     res.json({
@@ -726,6 +911,7 @@ router.get('/filters', async (req, res, next) => {
       salespeople: sp.rows.map((r) => ({ name: r.salesperson, department: r.department })),
       customers: cu.rows.map((r) => r.customer_name),
       agingCategories: ag.rows.map((r) => r.cat),
+      cities: ct.rows.map((r) => r.city),
     })
   } catch (err) {
     next(err)
@@ -801,8 +987,91 @@ router.get('/warnings', async (req, res, next) => {
 // 最新快照 = 表内 snapshot_date 最大的一批
 // ------------------------------------------------------------
 async function getCpuLatestSnapshot() {
+  // 用 to_char 直接取字符串：DATE → Date → toISOString 会在东八区退回一天
   const { rows } = await query(
-    `SELECT MAX(snapshot_date) AS d FROM customer_platform_unpaid`
+    `SELECT to_char(MAX(snapshot_date), 'YYYY-MM-DD') AS d FROM customer_platform_unpaid`
+  )
+  return rows[0]?.d || null
+}
+
+// ⚠ 金额口径（2026-09-28 变更，使用者拍板）
+//   源表《(客户未回款平台)未回款.xlsx》里有两个并列的金额列，含义完全不同：
+//     sales_amount       销售金额     = 销售单价 × 数量     （如 259 × 20 = 5,180）
+//     sales_amount_total 销售金额合计 = 导单销售金额        （如 20,170，通常大 3 倍）
+//   看板原先用的是 sales_amount_total，而使用者给的对标报表（客户未回款平台金额合计
+//   190.96 万）用的是 sales_amount。两者同一天同为 235 单，差 3 倍（574.78 万 vs 190.96 万）。
+//   使用者 2026-09-28 明确选择「改用 sales_amount（同参考图）」，故统一到这里。
+//   全部客户平台相关的 SQL 金额列都引用这个常量，避免漏改造成同一页两套口径。
+const CPU_AMOUNT_COL = 'sales_amount'
+
+/**
+ * 上一期快照：用于头部「较上期 ↓ xx万」。
+ *
+ * 背景（2026-09-28 查明）：源表《客户未回款》按周出数，但同步每天跑，
+ * 所以库里会有「同一批数据被连续抓几天、金额完全相同」的快照，也会偶尔出现
+ * **口径跑偏的异常批次**。当时的实际情况：
+ *   09-20 周日  261.24万 / 238 行   最早订单 2026-01-07
+ *   09-21 周一  261.24万 / 238 行   （与 09-20 完全相同 = 同一批）
+ *   09-22 周二  261.24万 / 238 行
+ *   09-23 周三  283.34万 / 273 行   最早订单 **2024-12-26**  ← 异常批
+ *   09-24 周四  190.96万 / 235 行   最早订单 2026-01-07   ← 本期
+ *
+ * 09-23 唯独把 2024 年的陈年订单也带了进来（比其他批次早一年多），
+ * 明显是源表视图口径跑偏，不是正式期次。对标报表的「上期 261.24 万」（源表标 9月18日）
+ * 也印证了这一点 —— 它跳过了 09-23。使用者 2026-09-28 确认按此处理。
+ *
+ * 判定规则（2026-09-29 修正，v2）：
+ *   **一批数据里出现了「订单日期早于基准年」的行，即视为异常批，跳过。**
+ *   基准年 = **全库最新批**里最小订单日期的年份（不是每批自己的年份！）。
+ *
+ * 为什么改（两次修正）：
+ *   v0「最早订单比本期早 180 天以上」—— 2026-09-29 实测全库批次 gap 都是 255~635 天，
+ *      **全部 > 180**，规则完全失效，只是靠 fallback 兜底才看起来能用。
+ *   v1「用每批自己的最早订单年份」—— 错。09-23 那批最早订单是 2024-12-27，
+ *      年份界随之退到 2024-01-01，于是它自己的跨年行数算成 0，反而没被抓出来。
+ *   v2（当前）「统一用最新批的年份当基准」—— 实测精准命中：
+ *      09-20/09-21/09-22/09-24/09-28  跨年行 = 0
+ *      09-23                          跨年行 = 4（订单日期 2024-12-27）← 唯一被判异常的批
+ *
+ * 用「年份」而不是「天数」：源表按自然年出数，跨年订单一出现就说明视图口径跑偏；
+ * 且基准年取自最新批，不会随被比较的批次漂移。
+ */
+async function getCpuPrevSnapshot(current) {
+  const { rows } = await query(
+    `WITH base_year AS (
+       SELECT EXTRACT(YEAR FROM MIN(order_date))::int AS y
+         FROM customer_platform_unpaid
+        WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM customer_platform_unpaid)
+     ),
+     meta AS (
+       SELECT snapshot_date,
+              COUNT(*) FILTER (WHERE order_date < make_date((SELECT y FROM base_year), 1, 1))
+                AS out_of_year,
+              ROUND(SUM(${CPU_AMOUNT_COL})::numeric, 2) AS amount
+         FROM customer_platform_unpaid
+        GROUP BY snapshot_date
+     ),
+     -- 金额相同 = 同一批数据被重复抓，只保留最早那天
+     dedup AS (
+       SELECT DISTINCT ON (amount) snapshot_date, amount, out_of_year
+         FROM meta
+        WHERE snapshot_date < $1::date
+        ORDER BY amount, snapshot_date
+     ),
+     -- 跨年订单数为 0 的才是正常批
+     ok AS (
+       SELECT snapshot_date FROM dedup
+        WHERE out_of_year = 0
+        ORDER BY snapshot_date DESC
+        LIMIT 1
+     ),
+     fallback AS (
+       SELECT MAX(snapshot_date) AS snapshot_date
+         FROM meta WHERE snapshot_date < $1::date
+     )
+     SELECT to_char(COALESCE((SELECT snapshot_date FROM ok),
+                             (SELECT snapshot_date FROM fallback)), 'YYYY-MM-DD') AS d`,
+    [current]
   )
   return rows[0]?.d || null
 }
@@ -812,26 +1081,182 @@ router.get('/customer-platform-unpaid/summary', async (req, res, next) => {
   try {
     const snapshot = await getCpuLatestSnapshot()
     if (!snapshot) {
-      return res.json({ hasData: false, snapshotDate: null, total: 0, orderCount: 0, customerCount: 0, platformCount: 0 })
+      return res.json({
+        hasData: false, snapshotDate: null, total: 0, prevTotal: null, prevSnapshotDate: null,
+        orderCount: 0, customerCount: 0, platformCount: 0, deltaAmount: null, deltaPct: null,
+      })
     }
+
+    // 可选按业务员过滤：给「我的业绩」页取某人自己的合计用。
+    // 不传 = 全量（客户平台看板页、首页的调用方式），行为与以前完全一致。
+    const salesperson = String(req.query.salesperson || '').trim()
+    const spFilter = salesperson ? ' AND salesperson = $2' : ''
+    const spParams = salesperson ? [snapshot, salesperson] : [snapshot]
+
     const { rows } = await query(
       `SELECT
-         COALESCE(SUM(sales_amount_total),0) AS total,
+         COALESCE(SUM(${CPU_AMOUNT_COL}),0) AS total,
          COUNT(*)                             AS order_count,
          COUNT(DISTINCT COALESCE(NULLIF(account_customer,''), customer_name, '未知客户')) AS customer_count,
          COUNT(DISTINCT platform)             AS platform_count
        FROM customer_platform_unpaid
-      WHERE snapshot_date = $1`,
-      [snapshot]
+      WHERE snapshot_date = $1${spFilter}`,
+      spParams
     )
     const r = nums(rows[0])
+
+    // 上一期快照（用于头部的「较上期 ↓ xx%」，参考图有这个信息）
+    // 注意：上期也要套用同一个业务员过滤，否则「较上期」是拿个人比全公司
+    const prev = await getCpuPrevSnapshot(snapshot)
+    let prevTotal = null
+    if (prev) {
+      const p = await query(
+        `SELECT COALESCE(SUM(${CPU_AMOUNT_COL}),0) AS total
+           FROM customer_platform_unpaid WHERE snapshot_date = $1${spFilter}`,
+        salesperson ? [prev, salesperson] : [prev]
+      )
+      prevTotal = Number(p.rows[0]?.total || 0)
+    }
+
+    const total = Number(r.total)
+    const deltaAmount = prevTotal === null ? null : Math.round((total - prevTotal) * 100) / 100
+    const deltaPct =
+      prevTotal === null || prevTotal === 0
+        ? null
+        : Math.round(((total - prevTotal) / prevTotal) * 1000) / 10
+
     res.json({
       hasData: true,
-      snapshotDate: new Date(snapshot).toISOString().slice(0, 10),
-      total: r.total,
+      snapshotDate: snapshot,
+      total,
+      prevSnapshotDate: prev,
+      prevTotal,
+      deltaAmount,
+      deltaPct,
       orderCount: Number(r.order_count),
       customerCount: Number(r.customer_count),
       platformCount: Number(r.platform_count),
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/customer-platform-unpaid/aging  账龄分布（参考图第一张表）
+//   表里没有账龄字段，用「订单日期」到「快照当月月末」的天数分档。
+//   边界规则是从使用者给的参考图反推出来的，4 档金额与单数全部精确吻合：
+//     基准 = 快照所在月的最后一天；age = 基准 - order_date
+//     age >= 90 → 3个月以上 / >= 60 → 2个月 / >= 30 → 1个月 / 其余 → 当月
+router.get('/customer-platform-unpaid/aging', async (req, res, next) => {
+  try {
+    const snapshot = await getCpuLatestSnapshot()
+    if (!snapshot) return res.json({ segments: [], total: 0, orderCount: 0, snapshotDate: null })
+
+    // 可选按业务员过滤（「我的业绩」页要看这个人自己的账龄结构）。
+    // 不传 = 全量，与客户平台看板页原来的行为完全一致。
+    const salesperson = String(req.query.salesperson || '').trim()
+    const spFilter = salesperson ? ' AND salesperson = $2' : ''
+    const params = salesperson ? [snapshot, salesperson] : [snapshot]
+
+    const { rows } = await query(
+      `WITH base AS (
+         SELECT (date_trunc('month', $1::date) + INTERVAL '1 month - 1 day')::date AS month_end
+       ),
+       x AS (
+         SELECT ${CPU_AMOUNT_COL} AS amt,
+                (SELECT month_end FROM base) - order_date AS age
+           FROM customer_platform_unpaid
+          WHERE snapshot_date = $1${spFilter}
+       )
+       SELECT CASE
+                WHEN age >= 90 THEN '3个月以上'
+                WHEN age >= 60 THEN '2个月'
+                WHEN age >= 30 THEN '1个月'
+                ELSE '当月'
+              END AS segment,
+              ROUND(SUM(amt)::numeric, 2)::float8 AS total,
+              COUNT(*)::int AS order_count,
+              MIN(age) AS min_age
+         FROM x
+        GROUP BY 1
+        ORDER BY MIN(age) DESC`,
+      params
+    )
+
+    const segments = rows.map((r) => ({
+      segment: r.segment,
+      total: Number(r.total),
+      orderCount: Number(r.order_count),
+    }))
+    res.json({
+      segments,
+      total: Math.round(segments.reduce((s, r) => s + r.total, 0) * 100) / 100,
+      orderCount: segments.reduce((s, r) => s + r.orderCount, 0),
+      snapshotDate: snapshot,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/customer-platform-unpaid/by-salesperson  按业务员汇总（参考图第二张表）
+router.get('/customer-platform-unpaid/by-salesperson', async (req, res, next) => {
+  try {
+    const snapshot = await getCpuLatestSnapshot()
+    if (!snapshot) return res.json({ rows: [], total: 0, orderCount: 0, snapshotDate: null })
+
+    const { rows } = await query(
+      `SELECT COALESCE(NULLIF(salesperson,''), '未分配') AS salesperson,
+              ROUND(SUM(${CPU_AMOUNT_COL})::numeric, 2)::float8 AS total,
+              COUNT(*)::int AS order_count
+         FROM customer_platform_unpaid
+        WHERE snapshot_date = $1
+        GROUP BY 1
+        ORDER BY SUM(${CPU_AMOUNT_COL}) DESC`,
+      [snapshot]
+    )
+    const list = rows.map((r) => ({
+      salesperson: r.salesperson,
+      total: Number(r.total),
+      orderCount: Number(r.order_count),
+    }))
+    res.json({
+      rows: list,
+      total: Math.round(list.reduce((s, r) => s + r.total, 0) * 100) / 100,
+      orderCount: list.reduce((s, r) => s + r.orderCount, 0),
+      snapshotDate: snapshot,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/customer-platform-unpaid/by-platform  按下单平台汇总（参考图第三张表）
+router.get('/customer-platform-unpaid/by-platform', async (req, res, next) => {
+  try {
+    const snapshot = await getCpuLatestSnapshot()
+    if (!snapshot) return res.json({ rows: [], total: 0, orderCount: 0, snapshotDate: null })
+
+    const { rows } = await query(
+      `SELECT COALESCE(NULLIF(platform,''), '未知平台') AS platform,
+              ROUND(SUM(${CPU_AMOUNT_COL})::numeric, 2)::float8 AS total,
+              COUNT(*)::int AS order_count
+         FROM customer_platform_unpaid
+        WHERE snapshot_date = $1
+        GROUP BY 1
+        ORDER BY SUM(${CPU_AMOUNT_COL}) DESC`,
+      [snapshot]
+    )
+    const list = rows.map((r) => ({
+      platform: r.platform,
+      total: Number(r.total),
+      orderCount: Number(r.order_count),
+    }))
+    res.json({
+      rows: list,
+      total: Math.round(list.reduce((s, r) => s + r.total, 0) * 100) / 100,
+      orderCount: list.reduce((s, r) => s + r.orderCount, 0),
+      snapshotDate: snapshot,
     })
   } catch (err) {
     next(err)
@@ -846,7 +1271,7 @@ router.get('/customer-platform-unpaid/platforms', async (req, res, next) => {
     const { rows } = await query(
       `SELECT platform FROM customer_platform_unpaid
         WHERE snapshot_date = $1 AND COALESCE(platform,'') <> ''
-        GROUP BY platform ORDER BY SUM(sales_amount_total) DESC`,
+        GROUP BY platform ORDER BY SUM(${CPU_AMOUNT_COL}) DESC`,
       [snapshot]
     )
     res.json({ platforms: rows.map((r) => r.platform) })
@@ -893,8 +1318,8 @@ router.get('/customer-platform-unpaid/breakdown', async (req, res, next) => {
       `SELECT
          COALESCE(NULLIF(account_customer,''), customer_name, '未知客户') AS customer,
          COALESCE(platform, '未知平台') AS platform,
-         COUNT(*)     AS order_count,
-         SUM(sales_amount_total)::float8 AS total
+         COUNT(*)::int AS order_count,
+         SUM(${CPU_AMOUNT_COL})::float8 AS total
        FROM customer_platform_unpaid
       WHERE ${where}
       GROUP BY 1, 2
@@ -923,7 +1348,7 @@ router.get('/customer-platform-unpaid/breakdown', async (req, res, next) => {
     res.json({
       records: customers,
       total,
-      snapshotDate: new Date(snapshot).toISOString().slice(0, 10),
+      snapshotDate: snapshot,
     })
   } catch (err) {
     next(err)
@@ -934,10 +1359,14 @@ router.get('/customer-platform-unpaid/breakdown', async (req, res, next) => {
 // 客户平台明细的筛选条件（页面查询与 Excel 导出**共用**）
 // ------------------------------------------------------------
 function buildCpuDetailFilter(req, snapshot) {
-  const { customer, platform, keyword } = req.query
+  const { customer, platform, keyword, salesperson } = req.query
   const conditions = ['snapshot_date = $1']
   const params = [snapshot]
 
+  if (salesperson) {
+    params.push(String(salesperson).trim())
+    conditions.push(`salesperson = $${params.length}`)
+  }
   if (customer) {
     params.push(customer)
     conditions.push(
@@ -982,7 +1411,7 @@ const CPU_EXPORT_SELECT = `
   account_customer                                          AS "accountCustomer",
   product_name                                              AS "product",
   qty::float8                                               AS "qty",
-  sales_amount_total::float8                                AS "amountTotal",
+  ${CPU_AMOUNT_COL}::float8                                 AS "amountTotal",
   salesperson,
   payment_status                                            AS "paymentStatus",
   invoice_status                                            AS "invoiceStatus"
@@ -997,7 +1426,7 @@ router.get('/customer-platform-unpaid/detail', async (req, res, next) => {
     const { page = 1, pageSize = 20 } = req.query
     const { where, params } = buildCpuDetailFilter(req, snapshot)
     const countRes = await query(
-      `SELECT COUNT(*) AS cnt, COALESCE(SUM(sales_amount_total),0) AS total
+      `SELECT COUNT(*) AS cnt, COALESCE(SUM(${CPU_AMOUNT_COL}),0) AS total
          FROM customer_platform_unpaid WHERE ${where}`,
       params
     )
@@ -1017,16 +1446,17 @@ router.get('/customer-platform-unpaid/detail', async (req, res, next) => {
          customer_order_no AS "orderNo",
          customer_name AS "customerName",
          account_customer AS "accountCustomer",
+         COALESCE(NULLIF(account_customer,''), customer_name, '') AS "customer",
          payment_status AS "paymentStatus",
          product_name AS "product",
          qty::float8 AS "qty",
-         sales_amount_total::float8 AS "amountTotal",
+         ${CPU_AMOUNT_COL}::float8 AS "amountTotal",
          salesperson,
          report_plan_no AS "planNo",
          invoice_status AS "invoiceStatus"
        FROM customer_platform_unpaid
       WHERE ${where}
-      ORDER BY sales_amount_total DESC
+      ORDER BY ${CPU_AMOUNT_COL} DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     )
@@ -1038,7 +1468,7 @@ router.get('/customer-platform-unpaid/detail', async (req, res, next) => {
       page: currentPage,
       pageSize: limit,
       totalPages: Math.ceil(count / limit),
-      snapshotDate: new Date(snapshot).toISOString().slice(0, 10),
+      snapshotDate: snapshot,
     })
   } catch (err) {
     next(err)
@@ -1047,8 +1477,9 @@ router.get('/customer-platform-unpaid/detail', async (req, res, next) => {
 
 // ------------------------------------------------------------
 // GET /api/export/customer-platform-detail  导出订单明细（当前筛选的全部行）
+//   与 /export/detail 一致：管理员与成员都可导出
 // ------------------------------------------------------------
-router.get('/export/customer-platform-detail', async (req, res, next) => {
+router.get('/export/customer-platform-detail', requireRole(...CAN_EXPORT), async (req, res, next) => {
   try {
     const snapshot = await getCpuLatestSnapshot()
     if (!snapshot) {
@@ -1075,7 +1506,7 @@ router.get('/export/customer-platform-detail', async (req, res, next) => {
       `SELECT ${CPU_EXPORT_SELECT}
          FROM customer_platform_unpaid
         WHERE ${where}
-        ORDER BY sales_amount_total DESC`,
+        ORDER BY ${CPU_AMOUNT_COL} DESC`,
       params
     )
 
@@ -1085,7 +1516,7 @@ router.get('/export/customer-platform-detail', async (req, res, next) => {
       sheetName: '客户平台订单明细',
     })
 
-    const snap = new Date(snapshot).toISOString().slice(0, 10)
+    const snap = snapshot
     sendXlsx(res, buffer, safeFilename(`客户平台订单明细_${snap}_${count}行.xlsx`))
   } catch (err) {
     next(err)
@@ -1094,8 +1525,9 @@ router.get('/export/customer-platform-detail', async (req, res, next) => {
 
 // ------------------------------------------------------------
 // 系统配置（监控参数 + 各数据源快照）—— 供「系统管理」页
+//   整页只给管理员，接口这一层也守住（前端隐藏菜单只是顺手的体验，不是防线）
 // ------------------------------------------------------------
-router.get('/system-config', async (req, res, next) => {
+router.get('/system-config', requireRole(ROLE_ADMIN), async (req, res, next) => {
   try {
     const watcher = {
       enabled: process.env.IMPORT_WATCH_ENABLED !== 'false',
@@ -1103,39 +1535,9 @@ router.get('/system-config', async (req, res, next) => {
       intervalMs: Number(process.env.IMPORT_WATCH_INTERVAL) || 15000,
     }
 
-    const { rows: batches } = await query(
-      `SELECT biz_type, snapshot_date, imported_at, row_count, total_amount
-         FROM import_batch
-        WHERE (biz_type, id) IN (
-              SELECT biz_type, MAX(id) FROM import_batch
-              GROUP BY biz_type)
-        ORDER BY biz_type`
-    )
-    const sources = batches.map((b) => ({
-      key: b.biz_type,
-      label: b.biz_type === 'billed_unpaid' ? '已开票未回款' : '已发货未开票',
-      snapshotDate: new Date(b.snapshot_date).toISOString().slice(0, 10),
-      importedAt: b.imported_at,
-      rows: Number(b.row_count),
-      totalAmount: b.total_amount,
-    }))
-
-    const cp = await query(
-      `SELECT MAX(snapshot_date) AS d,
-              COUNT(*) AS cnt,
-              COALESCE(SUM(sales_amount_total),0) AS total
-         FROM customer_platform_unpaid`
-    )
-    if (cp.rows[0].d) {
-      sources.push({
-        key: 'customer_platform_unpaid',
-        label: '客户平台未回款',
-        snapshotDate: cp.rows[0].d.toISOString().slice(0, 10),
-        importedAt: null,
-        rows: Number(cp.rows[0].cnt),
-        totalAmount: cp.rows[0].total,
-      })
-    }
+    // 快照的来源逻辑与「同步状态」共用一份，避免两处各写一遍再跑偏
+    // （曾经就因为 snapshot_date 走了 toISOString 而在东八区少一天）
+    const sources = await collectSources()
 
     res.json({ watcher, sources })
   } catch (err) {
@@ -1145,11 +1547,14 @@ router.get('/system-config', async (req, res, next) => {
 
 // ------------------------------------------------------------
 // 数据同步（网页端「立即同步」按钮）
-//   POST /api/sync          启动一次「抓云端 → 入库」（需登录）
+//   POST /api/sync          启动一次「抓云端 → 入库」（仅管理员）
 //   GET  /api/sync/status   轮询进度（含滚动日志）
 //   GET  /api/sync/runs     最近若干次同步记录（持久化，重启后仍在）
+//
+// 同步会覆盖当日快照（写库），且它的日志/记录属于运维信息，
+// 因此这一组一并划给管理员。
 // ------------------------------------------------------------
-router.post('/sync', requireSyncAuth, async (req, res, next) => {
+router.post('/sync', requireRole(ROLE_ADMIN), async (req, res, next) => {
   try {
     const { started, reason, missing } = await startSync({ trigger: 'manual' })
     if (!started) {
@@ -1165,15 +1570,22 @@ router.post('/sync', requireSyncAuth, async (req, res, next) => {
   }
 })
 
-router.get('/sync/status', async (req, res, next) => {
+router.get('/sync/status', requireRole(ROLE_ADMIN), async (req, res, next) => {
   try {
     const st = getSyncState()
-    // 刚跑完且成功时，顺带带上最新快照，前端一次请求就能刷新表格
-    if (!st.running && st.ok && !st.sources) {
+    // 数据源快照**每次都以库为准**。
+    //
+    // 2026-09-29 修：原来是 `if (!st.running && st.ok && !st.sources)` 才去查库 ——
+    // 也就是「只有从没查过」才刷新。一旦内存里存过一份，之后永远返回那份陈旧值。
+    // 实测踩到：shipped_uninvoiced 库里是 11,379,059.66，同步面板却显示 11,422,249.15
+    // （差 43,189.49），管理员会以为数据出问题。
+    // 这里只查几张表的最新批次，开销很小，而这个接口是管理员低频调用的，
+    // 用「实时准确」换掉「省几次查询」是划算的。
+    if (!st.running) {
       try {
         st.sources = await collectSources()
       } catch {
-        /* 拿不到就等前端自己刷 */
+        /* 查库失败就退回内存里的旧快照，总比没有强 */
       }
     }
     res.json(st)
@@ -1183,10 +1595,159 @@ router.get('/sync/status', async (req, res, next) => {
 })
 
 /** 同步历史：持久化在 sync_run 表，后端重启也能看到 */
-router.get('/sync/runs', async (req, res, next) => {
+router.get('/sync/runs', requireRole(ROLE_ADMIN), async (req, res, next) => {
   try {
     const runs = await listSyncRuns({ limit: req.query.limit })
     res.json({ runs })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ------------------------------------------------------------
+// GET /api/freshness   数据新鲜度（所有角色可用）
+//
+// 为什么单独开一个接口，而不复用 /sync/status：
+//   /sync/status 是 requireRole(ROLE_ADMIN) —— 成员本来就看不到同步详情
+//   （日志、触发人、主机名等属于管理信息，不该下放）。
+//   但「这份数据是不是新鲜的」是**每个看数的人都该知道**的，
+//   尤其开了定时同步之后，万一定时任务挂了（凭证过期等），
+//   成员在页面上必须能第一眼发现，而不是拿着旧数据做决策。
+//
+// 因此这里只暴露判断新鲜度所必需的三个字段，不含日志、不含触发人：
+//   lastSyncAt  上次同步完成时间（ISO）
+//   ok          上次是否成功
+//   running     是否正在同步
+// ------------------------------------------------------------
+router.get('/freshness', async (req, res, next) => {
+  try {
+    const st = getSyncState({ withLog: false })
+    res.json({
+      lastSyncAt: st.finishedAt || null,
+      ok: !!st.ok,
+      running: !!st.running,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ------------------------------------------------------------
+// GET /api/priority/actions  待处理优先级清单（只读，独立新接口）
+//
+// 目的：现有页面能回答「欠多少 / 压多久 / 谁的事」，但回答不了
+// 「我今天先打哪个电话」。一笔 155 万和一笔 300 元的单在明细表里是平等的两行。
+// 这里把「金额 × 账龄」合成一个可直接排序的风险分，输出可执行的 TOP 清单。
+//
+// 设计取舍：
+//   - 纯只读，不改任何现有接口与表结构，不新增索引依赖。
+//   - 只允许两条口径明确的数据线（已开票未回款 / 已发货未开票），
+//     客户平台那条线结构不同（订单级、按周出数），本期不纳入，避免口径混用。
+//   - 风险分 = 金额权重 × 账龄权重，两个权重都返回给前端，
+//     便于界面上解释「为什么这条排前面」，而不是给一个黑盒数字。
+// ------------------------------------------------------------
+const PRIORITY_BIZ = {
+  billed_unpaid: { label: '已开票未回款', table: 'receivable_detail' },
+  shipped_uninvoiced: { label: '已发货未开票', table: 'receivable_detail' },
+}
+
+/** 账龄档 → 风险系数。越老越紧急；「当月」虽新但金额大也需关注 */
+const AGING_WEIGHT = {
+  '3个月以上': 1.0,
+  '3个月': 0.75,
+  '2个月': 0.55,
+  '1个月': 0.35,
+  '当月': 0.15,
+}
+
+/** 把库里的账龄全名（「三个月以上未回款」）归一到短档名 */
+function normAging(cat) {
+  const c = String(cat || '')
+  if (c.includes('三个月以上')) return '3个月以上'
+  if (c.includes('三个月')) return '3个月'
+  if (c.includes('两个月')) return '2个月'
+  if (c.includes('一个月')) return '1个月'
+  return '当月'
+}
+
+router.get('/priority/actions', async (req, res, next) => {
+  try {
+    const bizType = PRIORITY_BIZ[req.query.bizType] ? req.query.bizType : 'billed_unpaid'
+    const batch = await getLatestBatch(bizType)
+    if (!batch) return res.json({ rows: [], summary: null, bizType, snapshotDate: null })
+
+    // 只取筛选需要的列；金额用 amount_total（该表口径，与 /summary 一致）
+    const { rows } = await query(
+      `SELECT doc_no                              AS "docNo",
+              to_char(doc_date,'YYYY-MM-DD')      AS "docDate",
+              COALESCE(aging_category,'未分类')   AS "agingCategory",
+              COALESCE(customer_name,'')          AS "customer",
+              COALESCE(salesperson,'')            AS "salesperson",
+              COALESCE(city,'')                   AS "city",
+              COALESCE(follow_up_note,'')         AS "note",
+              amount_total::float8                AS "amount"
+         FROM receivable_detail
+        WHERE batch_id = $1`,
+      [batch.id]
+    )
+
+    // 阈值：可配置，默认 1 万以下视为「小额长尾」（催收成本可能高于欠款本身）
+    const smallThreshold = Number(req.query.smallThreshold) || 10000
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 200)
+
+    const enriched = rows.map((r) => {
+      const aging = normAging(r.agingCategory)
+      const amount = Number(r.amount) || 0
+      const w = AGING_WEIGHT[aging] ?? 0.15
+      // 风险分：金额(万) × 账龄系数。用「万」让数字量级更可读（155.61 × 1.0 = 155.61）
+      const score = Math.round((amount / 10000) * w * 100) / 100
+      return { ...r, aging, amount, agingWeight: w, score }
+    })
+
+    const all = enriched.filter((r) => r.amount > 0)
+    const totalAmount = all.reduce((s, r) => s + r.amount, 0)
+
+    // TOP 清单：按风险分倒序（就是「先打哪个电话」的顺序）
+    const top = [...all].sort((a, b) => b.score - a.score).slice(0, limit)
+
+    // 大额集中度：前 N 笔占总额多少 —— 用来回答「是不是几笔就决定了全局」
+    const top10 = [...all].sort((a, b) => b.amount - a.amount).slice(0, 10)
+    const top10Sum = top10.reduce((s, r) => s + r.amount, 0)
+
+    // 小额长尾：老账里那些「催了不划算」的单
+    const smallOld = all.filter((r) => r.amount < smallThreshold && r.agingWeight >= 0.75)
+    const smallOldSum = smallOld.reduce((s, r) => s + r.amount, 0)
+
+    // 按业务员看「高风险集中在谁身上」
+    const bySp = {}
+    for (const r of all) {
+      const k = r.salesperson || '未分配'
+      bySp[k] = bySp[k] || { salesperson: k, amount: 0, count: 0, over3m: 0, score: 0 }
+      bySp[k].amount += r.amount
+      bySp[k].count += 1
+      bySp[k].score += r.score
+      if (r.agingWeight >= 1.0) bySp[k].over3m += r.amount
+    }
+    const salespersons = Object.values(bySp)
+      .map((v) => ({ ...v, amount: Math.round(v.amount * 100) / 100, over3m: Math.round(v.over3m * 100) / 100, score: Math.round(v.score * 100) / 100 }))
+      .sort((a, b) => b.over3m - a.over3m)
+
+    res.json({
+      bizType,
+      bizLabel: PRIORITY_BIZ[bizType].label,
+      snapshotDate: batch.snapshot_date,
+      rows: top,
+      salespersons,
+      summary: {
+        totalAmount: Math.round(totalAmount * 100) / 100,
+        totalCount: all.length,
+        top10Amount: Math.round(top10Sum * 100) / 100,
+        top10Ratio: totalAmount > 0 ? Math.round((top10Sum / totalAmount) * 1000) / 10 : 0,
+        smallThreshold,
+        smallOldCount: smallOld.length,
+        smallOldAmount: Math.round(smallOldSum * 100) / 100,
+      },
+    })
   } catch (err) {
     next(err)
   }

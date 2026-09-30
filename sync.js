@@ -8,15 +8,29 @@
  *
  * 依赖：kdocs_pull.py（看板模板目录）+ kdocs_token.txt 凭证
  */
+import 'dotenv/config'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { pool } from './server/db/pool.js'
 import { importExcel, importCustomerPlatformUnpaid } from './server/services/importer.js'
+import { todayDate } from './server/utils/date.js'
+import { resolveExecutable } from './server/utils/executable.js'
 
-const PY = process.env.PYTHON_PATH || 'C:/Users/Administrator/.workbuddy/binaries/python/envs/default/Scripts/python.exe'
-const KDOCS_PULL = 'C:/Users/Administrator/Desktop/看板模板/kdocs_pull.py'
-const EXPORT_DIR = 'C:/Users/Administrator/Desktop/应收看板-数据导出'
+// 抓取脚本 / Python / 导出目录全部走环境变量，便于容器化部署
+// （Windows 本机跑时用 .env 里的值即可，默认值与原来一致）
+const PY =
+  process.env.PYTHON_PATH ||
+  'C:/Users/Administrator/.workbuddy/binaries/python/envs/default/Scripts/python.exe'
+const KDOCS_PULL =
+  process.env.KDOCS_PULL_SCRIPT || 'C:/Users/Administrator/Desktop/看板模板/kdocs_pull.py'
+const EXPORT_DIR =
+  process.env.EXPORT_DIR || 'C:/Users/Administrator/Desktop/应收看板-数据导出'
+
+// PY 在本机 Windows 是绝对路径，在容器里是命令名（python3）。
+// 命令名必须经 PATH 解析 —— 直接 existsSync('python3') 恒为 false，
+// 会让同步永远停在「找不到 Python」（容器化部署时踩过这个坑）。
+const PY_BIN = resolveExecutable(PY)
 
 // 三张表：抓取参数名 → { 文件名, 业务类型 }
 const TABLES = {
@@ -48,12 +62,12 @@ function pull() {
     log(`✖ 找不到抓取脚本：${KDOCS_PULL}`)
     return false
   }
-  if (!fs.existsSync(PY)) {
+  if (!PY_BIN) {
     log(`✖ 找不到 Python：${PY}`)
     return false
   }
 
-  const res = spawnSync(PY, [KDOCS_PULL, '未回款', '未开票', '客户平台'], {
+  const res = spawnSync(PY_BIN, [KDOCS_PULL, '未回款', '未开票', '客户平台'], {
     encoding: 'utf8',
     stdio: 'inherit',
   })
@@ -83,7 +97,8 @@ function pull() {
 /** 导入 EXPORT_DIR 里的 xlsx 到数据库 */
 async function importAll() {
   log('\n=== [2/2] 导入 PostgreSQL ===')
-  const snapshotDate = new Date().toISOString().slice(0, 10)
+  // 用本地日期而不是 UTC：new Date().toISOString() 在北京时间 00:00–08:00 会记成昨天
+  const snapshotDate = todayDate()
   let ok = 0
   let fail = 0
 
@@ -136,12 +151,17 @@ async function main() {
 
   await pool.end()
 
+  // 退出码含义（上层 syncRunner 依赖它生成提示语，别再改动）：
+  //   0 = 全部成功
+  //   1 = 云端抓取失败（多半是 Token 失效 / 网络不通）
+  //   2 = 抓取成功但部分文件入库失败（多半是文件缺失或格式变了）
+  // 必须区分开：这两种情况让用户做的事完全不同 —— 换凭证 vs 查文件。
   if (!pulled && doPull) {
     log('\n⚠ 云端抓取未成功。')
     process.exitCode = 1
   } else if (!imported && doImport) {
     log('\n⚠ 部分文件导入失败，请检查上方错误。')
-    process.exitCode = 1
+    process.exitCode = 2
   } else {
     log('\n✔ 全部完成！网页看板已是最新数据：http://localhost:5173')
   }

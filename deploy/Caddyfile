@@ -1,0 +1,52 @@
+# ============================================================
+# 云端看板 · 站点配置
+#
+# SITE_ADDRESS 决定站点地址，由 compose 注入（见 docker-compose.yml）：
+#   - 有域名：SITE_ADDRESS=kanban.example.com
+#       → Caddy 自动申请并续期 Let's Encrypt 证书，强制 HTTPS
+#       前提：域名 A 记录已指向本机，且 80/443 可从公网访问
+#   - 只有 IP、先跑起来看看：SITE_ADDRESS=:80
+#       → 纯 HTTP，不申请证书
+# ============================================================
+
+{$SITE_ADDRESS} {
+	# 压缩静态资源
+	encode zstd gzip
+
+	# ---------- 后端接口：反代到 api 容器 ----------
+	# Caddy 会自动带上 X-Forwarded-For / X-Forwarded-Proto，
+	# 后端 TRUST_PROXY=true 时才采信这些头（登录限流按真实 IP 计数）
+	handle /api/* {
+		reverse_proxy api:3000
+	}
+
+	# ---------- 前端：Vue SPA ----------
+	handle {
+		root * /srv
+		# history 模式路由：找不到的路径一律回落到 index.html，
+		# 否则直接刷新 /detail 这类深层路由会 404
+		try_files {path} /index.html
+		file_server
+	}
+
+	# 静态资源长缓存（文件名带 hash，内容变了文件名也会变）
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+
+	# index.html 不缓存，保证发版后立刻生效
+	@html path /index.html /
+	header @html Cache-Control "no-cache"
+
+	# 基础安全响应头
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

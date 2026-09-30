@@ -7,6 +7,16 @@
         <p class="subtitle">应收 / 开票管理</p>
       </div>
 
+      <el-alert
+        v-if="switching"
+        type="info"
+        :closable="false"
+        show-icon
+        class="switch-tip"
+      >
+        已退出当前账号，请用另一个账号登录
+      </el-alert>
+
       <el-form
         ref="formRef"
         :model="form"
@@ -16,6 +26,7 @@
       >
         <el-form-item label="用户名" prop="username">
           <el-input
+            ref="userRef"
             v-model="form.username"
             placeholder="请输入用户名"
             size="large"
@@ -71,19 +82,41 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
 import { login, setAuthToken, getMe, clearAuthToken } from '@/api'
+import { saveAccount } from '@/composables/savedAccounts'
 
 const router = useRouter()
 const route = useRoute()
 
 const formRef = ref(null)
+const userRef = ref(null)
 const loading = ref(false)
 // 被限流时剩余的锁定分钟数；0 表示未被锁定
 const lockedUntil = ref(0)
+
+// 顶栏「切换账号」跳过来时带 ?switch=1：预填上一个用户名、光标落在密码框
+const switching = route.query.switch === '1'
+const LAST_USER_KEY = 'cloud-dashboard:last-user'
+
+function readLastUser() {
+  try {
+    return localStorage.getItem(LAST_USER_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function saveLastUser(name) {
+  try {
+    localStorage.setItem(LAST_USER_KEY, name || '')
+  } catch {
+    /* 隐私模式忽略 */
+  }
+}
 
 // 记住登录状态：开启时写入 localStorage，否则只在本次会话内有效
 const REMEMBER_KEY = 'cloud-dashboard:remember'
@@ -97,7 +130,7 @@ const savedRemember = (() => {
   }
 })()
 
-const form = reactive({ username: '', password: '', remember: savedRemember })
+const form = reactive({ username: switching ? readLastUser() : '', password: '', remember: savedRemember })
 
 const rules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
@@ -110,9 +143,18 @@ onMounted(async () => {
     const me = await getMe()
     if (me.loggedIn) {
       router.replace(route.query.redirect || '/')
+      return
     }
   } catch {
     /* 未登录，留在本页 */
+  }
+  // 切换账号过来：用户名已预填并**全选**、光标落在用户名框 ——
+  // 直接敲就是换人（覆盖掉预填的），不敲就 Tab 到密码给同一个人重登，两种都顺手
+  if (switching) {
+    nextTick(() => {
+      userRef.value?.focus()
+      userRef.value?.select()
+    })
   }
 })
 
@@ -143,10 +185,17 @@ async function onSubmit() {
       return
     }
     setAuthToken(r.token)
+    // 记下这次用的用户名，下次「切换账号」时预填
+    saveLastUser(form.username.trim())
+    // 并存一份令牌到「本机账号」列表，供顶栏一键切换（只存令牌，不存密码）
+    saveAccount({ username: r.username || form.username.trim(), role: r.role, token: r.token })
     ElMessage.success(
       form.remember ? `登录成功，${REMEMBER_DAYS} 天内免登录` : '登录成功'
     )
-    router.replace(route.query.redirect || '/')
+    // 成员账号直接进「我的业绩」，管理员进首页
+    const role = r.role || ''
+    const target = role === 'member' ? '/my-performance' : (route.query.redirect || '/')
+    router.replace(target)
   } catch (err) {
     const data = err?.response?.data
     const status = err?.response?.status
@@ -226,6 +275,10 @@ async function onSubmit() {
 
 .lock-tip { margin-bottom: 14px; }
 .lock-tip :deep(.el-alert__content) { font-size: 12px; line-height: 1.6; }
+
+/* 从顶栏「切换账号」过来时的提示 */
+.switch-tip { margin-bottom: 18px; }
+.switch-tip :deep(.el-alert__content) { font-size: 13px; line-height: 1.6; }
 
 :deep(.el-checkbox__label) { font-size: 13px; }
 
