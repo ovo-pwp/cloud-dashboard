@@ -1,8 +1,57 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
+// ------------------------------------------------------------
+// Element Plus 按需引入（2026-10-10 改）
+//
+// 原先是 `app.use(ElementPlus)` 全量引入 —— 主包 954KB / gzip 314KB，
+// 是首屏下载的大头（公网每次往返约 230ms，多出的体积直接变成等待时间）。
+// 实测：只引 3 个组件时主包掉到 307KB / gzip 110KB，说明 tree-shaking 有效。
+//
+// ⚠️ 白名单式注册：**源码里新用到 el-xxx 组件时，必须同步加到这里**，
+//    否则 Vue 会静默渲染成未知元素（不报错、只是没样式/没功能）。
+//    查漏命令：grep -rhoE "<el-[a-z-]+" src/ | sed 's/<//' | sort -u
+// ------------------------------------------------------------
+import {
+  ElAlert,
+  ElAside,
+  ElAvatar,
+  ElButton,
+  ElCard,
+  ElCheckbox,
+  ElCol,
+  ElCollapse,
+  ElCollapseItem,
+  ElContainer,
+  ElDatePicker,
+  ElDescriptions,
+  ElDescriptionsItem,
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu,
+  ElEmpty,
+  ElForm,
+  ElFormItem,
+  ElHeader,
+  ElIcon,
+  ElInput,
+  ElLoading,
+  ElMain,
+  ElMenu,
+  ElMenuItem,
+  ElOption,
+  ElPagination,
+  ElRadioButton,
+  ElRadioGroup,
+  ElRow,
+  ElSelect,
+  ElSubMenu,
+  ElTable,
+  ElTableColumn,
+  ElTag,
+  ElTooltip,
+} from 'element-plus'
+// 样式仍用全量 CSS（体积小；逐组件引样式容易漏，收益也不大）
 import 'element-plus/dist/index.css'
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
@@ -10,6 +59,53 @@ import { setUnauthorizedHandler, clearAuthToken } from './api'
 
 const app = createApp(App)
 
+const EP_COMPONENTS = [
+  ElAlert,
+  ElAside,
+  ElAvatar,
+  ElButton,
+  ElCard,
+  ElCheckbox,
+  ElCol,
+  ElCollapse,
+  ElCollapseItem,
+  ElContainer,
+  ElDatePicker,
+  ElDescriptions,
+  ElDescriptionsItem,
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu,
+  ElEmpty,
+  ElForm,
+  ElFormItem,
+  ElHeader,
+  ElIcon,
+  ElInput,
+  ElMain,
+  ElMenu,
+  ElMenuItem,
+  ElOption,
+  ElPagination,
+  ElRadioButton,
+  ElRadioGroup,
+  ElRow,
+  ElSelect,
+  ElSubMenu,
+  ElTable,
+  ElTableColumn,
+  ElTag,
+  ElTooltip,
+]
+for (const c of EP_COMPONENTS) {
+  if (c && c.name) app.component(c.name, c)
+}
+
+// v-loading 指令：ElLoading 的 install 会 app.directive('loading', ...)
+app.use(ElLoading)
+
+// 图标仍全局注册 —— SystemHub.vue 用**字符串名**引用图标（icon: 'DataAnalysis'），
+// 没有全局注册就渲染不出来。别删。
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)
 }
@@ -24,7 +120,8 @@ setUnauthorizedHandler(() => {
 })
 
 app.use(createPinia())
-app.use(ElementPlus, { locale: zhCn })
+// 注意：按需注册后不能再 app.use(ElementPlus)，中文 locale 交给 App.vue 里的
+// <el-config-provider :locale="zhCn"> 提供
 app.use(router)
 app.mount('#app')
 

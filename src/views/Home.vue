@@ -111,7 +111,9 @@
         所以「上期」有时是昨天、有时是四五天前。不写明天数，看的人会默认以为是「昨天」，
         从而误判涨跌金额的严重程度 —— 「一天涨 7.5 万」和「五天涨 7.5 万」完全是两回事。
       -->
-      <div v-if="summary.prev" class="delta-note">
+      <!-- no-export（2026-10-14 使用者「注释也不要了」）：这段对比基准说明只在屏幕上看，
+           导出的图里不要 —— 领导看的图不该带这些过程性注释。 -->
+      <div v-if="summary.prev" class="delta-note no-export">
         <span class="delta-note-icon">↕</span>
         <span>对比基准 <b>{{ summary.prev.snapshotDate }}</b></span>
         <span v-if="prevGapDays !== null" class="delta-note-gap">
@@ -126,25 +128,14 @@
         </span>
       </div>
 
-      <!-- 账龄结构 -->
-      <el-card shadow="never" class="block-card">
-        <template #header><span class="card-title">账龄结构</span></template>
-
-        <div v-for="item in agingRows" :key="item.category" class="aging-row">
-          <div class="aging-name">{{ item.category }}</div>
-          <div class="aging-bar-wrap">
-            <div
-              class="aging-bar"
-              :style="{
-                width: agingPercent(item.total) + '%',
-                background: agingColor(item.category),
-              }"
-            />
-          </div>
-          <div class="aging-amount">{{ num(item.total) }}</div>
-          <div class="aging-count">{{ item.docCount }} 单</div>
-        </div>
-      </el-card>
+      <!--
+        账龄结构卡已删除（2026-10-13 使用者：「这个账龄结构可以删掉了」「作用不大」）。
+        删掉的理由：5 档金额 = 下面「业务员 × 账龄段」矩阵的合计行 = 顶部「总额」卡片拆分，
+        静态数字重复三遍；10-12 加过「较上期」想救一下，但源表没更新时 5 档全是「持平」，仍无信息量。
+        配套删掉的还有：agingList / agingPrev / agingRows / agingDeltas / agingPrevDate、
+        agingPercent / agingOrder / agingColor、loadAll 里的 getAgingSummary 请求、以及 .aging-* 样式。
+        ⚠️ 后端 `/api/aging-summary` 保留（别的页面/脚本可能在用，删了怕连累）。
+      -->
 
       <!-- 业务员 × 账龄段：一张矩阵表，跟发领导的 Excel 汇总同构 -->
       <el-card shadow="never" class="block-card">
@@ -191,7 +182,41 @@
           </el-table-column>
         </el-table>
       </el-card>
+
+      <!--
+        当日明细（2026-10-14）：先加「当日回款明细」，随后使用者「新增的也加上」⇒ 两张同款表，新增在上、回款在下
+        （与「本期变动」块的分组顺序一致）。
+
+        🔴 **只未回款线**：未开票线对应「当日已开票 / 当日新增的已发货未开票」，使用者明确「开票的先不要」⇒ 切过去两张都不渲染
+           （由 `detailGroups` computed 返回空数组实现，不用在这里写 v-if）。
+        🔴 **要进导出图**（10-14 晚使用者「导出的图片怎么没有回款的」）—— 所以**不能挂 `no-export`**，
+           导出前也不再把它们移除。代价：图会随明细行数变高。
+        🔴 表尾合计用 `detailSummary`：**el-table 自带求和出的是裸数字**（45052.81），全站金额要千分位 + 2 位小数。
+      -->
+      <el-card v-for="g in detailGroups" :key="g.key" shadow="never" class="block-card">
+        <template #header><span class="card-title">{{ g.title }}</span></template>
+        <el-table
+          :data="g.rows"
+          border
+          class="pay-detail"
+          :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
+          :cell-style="{ padding: '8px 0' }"
+          show-summary
+          :summary-method="detailSummary"
+        >
+          <el-table-column prop="doc_no" label="单据编号" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="customer_name" label="客户名称" min-width="260" show-overflow-tooltip />
+          <el-table-column prop="salesperson" label="业务员" width="110" />
+          <el-table-column prop="aging_category" label="账龄" width="160" show-overflow-tooltip />
+          <el-table-column prop="amt" label="金额（元）" min-width="140" align="right">
+            <template #default="{ row }"><span class="mx-amt">{{ num(row.amt) }}</span></template>
+          </el-table-column>
+        </el-table>
+      </el-card>
     </template>
+
+    <!-- 2026-10-14：「本期变动」整块移到「每日发货·回款」独立页，概览页不再放（导出图因此变横版）。
+         那块是同一个组件、明细最长得 115 行，摆在概览页只会把导出的图拉成竖条。 -->
   </div>
 </template>
 
@@ -199,10 +224,11 @@
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { toPng } from 'html-to-image'
+import { captureWithFullWidth } from '@/utils/exportSize'
 import { storeToRefs } from 'pinia'
 import { useBizStore } from '@/stores/biz'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { getSummary, getAgingSummary, getAgingBySalesperson } from '@/api'
+import { getSummary, getAgingBySalesperson, getLineDelta } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 
 const biz = useBizStore()
@@ -211,8 +237,21 @@ const { current } = storeToRefs(biz)
 const loading = ref(false)
 const exporting = ref(false)
 const homeEl = ref(null)
-const agingList = ref([])
 const salespersonList = ref([])
+
+/**
+ * `/home` 底部两张明细表的数据（2026-10-14：先加「当日回款明细」，随后使用者「新增的也加上」）。
+ *
+ * 🔴 **只做未回款线**（已开票未回款 tab）—— 未开票线对应的是「当日已开票 / 当日新增的已发货未开票」，
+ *    使用者明确说「开票的先不要」，所以未开票页签下两张表都不渲染（`v-if="deltaDetail"`）。
+ * 🔴 数据都是**推算值**：源表是「还没回款」的快照，单子结清后会消失；
+ *    `removed` = 上一批有、这一批没有的单（+ 金额变小的部分）；`added` = 上一批没有的新单。
+ *    两者都是**全量口径（含当月）**，与 /trend 的「当日回款 / 当日新增」同源同口径。
+ * 🔴 `added` 只取**真新增**（账龄「当月」档）；补录（老单补登记）不混进来 ——
+ *    使用者 10-14 明确「不要上一次表里面摸鱼出现的就爆出来」（后端已拆成 `backfilled`）。
+ * 一次请求就能拿到两组，别拉两次。
+ */
+const deltaDetail = ref(null)
 
 const summary = reactive({
   hasData: false,
@@ -291,11 +330,6 @@ function delta(cur, prev, opts = {}) {
   return { text, cls, pct, diff, prevDate: summary.prev?.snapshotDate || '' }
 }
 
-function agingPercent(amount) {
-  if (!summary.total) return 0
-  return Math.max((amount / summary.total) * 100, 1)
-}
-
 // 金额格式（千分位 + 2 位小数）
 function num(v) {
   return Number(v || 0).toLocaleString('en-US', {
@@ -344,23 +378,48 @@ function matrixSummary({ columns }) {
   })
 }
 
+/**
+ * 「当日回款明细」的表尾合计——只说一句「合计多少钱」。
+ * 2026-10-14：原来这些信息（张数 / 合计 / 基准日期 / 口径）全堆在标题右侧，使用者圈掉说「这里的注释就不要了」，
+ * 于是合计挪到表尾（与上面矩阵表同一个做法），其余交给页头的「对比基准」那条和表格本身的行数。
+ * ⚠️ 用它而不是 el-table 自带的求和：金额列要**千分位 + 2 位小数**（跟全站一致），自带的会出裸数字。
+ */
+/**
+ * 底部当日明细的分组：新增在上、回款在下（与「本期变动」块的分组顺序一致）。
+ *
+ * 模板里只写一个 `v-for`，分组的有无全在这里决定：
+ *  · 切到未开票线 ⇒ `deltaDetail` 为 null ⇒ 返回空数组（两张都不渲染）
+ *  · 某组 0 张 ⇒ 过滤掉，不留一张空表
+ *
+ * ⚠️ 2026-10-14 晚：**这两张表现在要进导出图**（使用者「导出的图片怎么没有回款的」——
+ *    早上他选的是「不进导出图」，后来发现图上少了回款明细，改回来了）。
+ *    所以这里**没有** `exporting` 那道过滤，卡片上也没挂 `no-export`。
+ *    代价：导出图会随明细行数变高（当天 2 张表约 +400px 逻辑高度）。
+ */
+const detailGroups = computed(() => {
+  const d = deltaDetail.value
+  if (!d) return []
+  return [
+    { key: 'added', title: '当日新增明细', rows: d.added },
+    { key: 'removed', title: '当日回款明细', rows: d.removed },
+  ].filter((g) => g.rows.length)
+})
+
+/**
+ * 当日明细的表尾合计 —— 直接按**表里的行**求和（不是取接口字段）。
+ * 2026-10-14：原来「张数 / 合计 / 基准日期 / 口径」全堆在标题右侧，使用者圈掉说「这里的注释就不要了」，
+ * 于是合计挪到表尾（与上面矩阵表同一做法）。标题旁不再挂任何说明。
+ * ⚠️ 不能用 el-table 自带的求和：它出的是**裸数字**（45052.81），全站金额一律千分位 + 2 位小数。
+ */
+function detailSummary({ columns, data }) {
+  const total = (data || []).reduce((a, r) => a + Number(r.amt || 0), 0)
+  return columns.map((col, i) => (i === 0 ? '合计' : i === columns.length - 1 ? num(round2(total)) : ''))
+}
+
 // ------------------------------------------------------------
 // 账龄分档：固定顺序（3个月以上 → 当月）
 // 接口返回顺序不保证稳定，两个业务类型下会不一样，看着不整齐；这里统一按账龄从老到新排
 // ------------------------------------------------------------
-const AGING_COLORS = ['#f56c6c', '#e6a23c', '#d4b106', '#409eff', '#67c23a']
-const AGING_ORDER = ['三个月以上', '三个月', '两个月', '一个月', '当月']
-
-function agingOrder(category) {
-  const i = AGING_ORDER.findIndex((k) => String(category || '').startsWith(k))
-  return i === -1 ? 99 : i
-}
-
-function agingColor(category) {
-  const i = agingOrder(category)
-  return i === 99 ? '#c0c4cc' : AGING_COLORS[i]
-}
-
 /** 单均金额 = 总额 ÷ 单据数。后端也返回 avgAmount，这里保持一致算法 */
 const avgAmount = computed(() => {
   const n = Number(summary.invoiceCount) || 0
@@ -421,16 +480,11 @@ const prevIdentical = computed(() => {
   )
 })
 
-const agingRows = computed(() =>
-  [...agingList.value].sort((a, b) => agingOrder(a.category) - agingOrder(b.category))
-)
-
 async function loadAll(silent) {
   if (!silent) loading.value = true
   try {
-    const [s, aging, bysp] = await Promise.all([
+    const [s, bysp] = await Promise.all([
       getSummary(current.value),
-      getAgingSummary(current.value),
       getAgingBySalesperson(current.value),
     ])
     // 先清 prev 再合并：切业务类型时若新数据没有 prev（该线只有一个批次），
@@ -440,8 +494,24 @@ async function loadAll(silent) {
     Object.assign(summary, s)
     // 后端可能返回 prev: undefined（老版本接口），统一归一成 null
     if (!summary.prev) summary.prev = null
-    agingList.value = (aging.records || []).filter((r) => r.total !== 0)
     salespersonList.value = bysp.records || []
+
+    // 「当日新增 / 回款明细」：只未回款线拉一次（复用 line-delta，不是新增后端负担）。
+    // 切到未开票线时显式置 null ⇒ 两张表都不渲染（使用者 10-14：「开票的先不要」）。
+    // 单独 try：这块挂了不该把上面四张卡一起拖黑。
+    deltaDetail.value = null
+    if (current.value === 'billed_unpaid') {
+      try {
+        const d = await getLineDelta('billed_unpaid')
+        deltaDetail.value = {
+          added: d?.added || [],       // 真新增（账龄「当月」档），补录不含
+          removed: d?.removed || [],   // 回款
+          prevDate: d?.prevDate || '',
+        }
+      } catch (e) {
+        console.error('[Home] 当日明细加载失败:', e)
+      }
+    }
   } catch (err) {
     console.error('[Home] 加载失败:', err)
   } finally {
@@ -449,7 +519,13 @@ async function loadAll(silent) {
   }
 }
 
-watch(current, loadAll)
+watch(current, () => {
+  // 🔴 切业务类型**立刻**清掉两张当日明细表，不能等 loadAll 里那串请求回来才清 ——
+  //    否则切到未开票线之后有几秒钟还挂着**上一条线**的单（串味）。
+  //    与卡片上 `summary.prev = null` 是同一个道理：看着正常、其实是别的线的数据，最难发现。
+  deltaDetail.value = null
+  loadAll()
+})
 onMounted(loadAll)
 useAutoRefresh(loadAll)
 
@@ -460,16 +536,21 @@ async function exportImage() {
   if (!homeEl.value) return
   exporting.value = true
   try {
-    const dataUrl = await toPng(homeEl.value, {
-      backgroundColor: '#ffffff',
-      pixelRatio: 2,
-      cacheBust: true,
-      width: homeEl.value.offsetWidth,
-      height: homeEl.value.offsetHeight,
-      // 导出时排除「导出看板图片」按钮本身：上报图片里不该出现这个按钮
-      filter: (node) =>
-        !(node instanceof Element && node.classList && node.classList.contains('no-export')),
-    })
+    const el = homeEl.value
+    // 导出：captureWithFullWidth 会先把元素临时撑到「根+全部后代」所需的最大宽度再截，
+    // 保证表格不横向滚动、右边不会被裁（笔记本上「合计」列曾只剩半截）。详见 utils/exportSize.js
+    const dataUrl = await captureWithFullWidth(
+      el,
+      toPng,
+      {
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+        // 导出时排除「导出看板图片」按钮本身：上报图片里不该出现这个按钮
+        filter: (node) =>
+          !(node instanceof Element && node.classList && node.classList.contains('no-export')),
+      },
+      { minWidth: 1200, minHeight: 800 }
+    )
     const name = `看板_${summary.bizLabel || biz.label}_${summary.snapshotDate || new Date().toISOString().slice(0, 10)}.png`
     const a = document.createElement('a')
     a.href = dataUrl
@@ -570,28 +651,11 @@ async function exportImage() {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 .card-title { font-weight: 600; color: #303133; }
-.aging-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0;
-  animation: fadeRow 0.4s ease-out;
-}
-@keyframes fadeRow {
-  from { opacity: 0; transform: translateX(-8px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-.aging-name { width: 130px; font-size: 14px; color: #606266; flex-shrink: 0; }
-.aging-bar-wrap { flex: 1; height: 18px; background: #f5f7fa; border-radius: 9px; overflow: hidden; }
-.aging-bar {
-  height: 100%;
-  border-radius: 9px;
-  transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.aging-amount { width: 150px; text-align: right; font-size: 14px; font-weight: 600; color: #303133; flex-shrink: 0; }
-.aging-count { width: 70px; text-align: right; font-size: 13px; color: #909399; flex-shrink: 0; }
+/* .aging-* 样式随「账龄结构」卡一起删除（2026-10-13）—— 保留 @keyframes fadeRow 会被清理器报未使用，故一并删 */
 .strong { font-weight: 600; color: #f56c6c; }
 .card-hint { margin-left: 10px; font-size: 12px; color: #909399; }
+/* 明细表尾合计：加粗 + 深色，跟矩阵表的表尾一致（表尾是「数据」不是「注释」，所以不删） */
+.pay-detail :deep(.el-table__footer .cell) { font-weight: 700; color: #303133; }
 /* ---------- 业务员 × 账龄段 矩阵表 ---------- */
 /* 等宽数字，保证各行金额小数点对齐，扫一眼就能比大小 */
 .matrix :deep(.el-table__footer .cell) { font-weight: 700; color: #303133; }
@@ -630,7 +694,9 @@ async function exportImage() {
   .stat-row { row-gap: 12px; }
   .stat-card { padding: 14px 12px; }
   .stat-label { font-size: 12px; }
-  .stat-value { font-size: 20px; }
+  /* 金额字号随屏宽自适应（16~22px），极端窄屏也完整显示不截断；
+     overflow-wrap 兜底，防止任何情况下数字被卡片裁掉 */
+  .stat-value { font-size: clamp(16px, 6.5vw, 22px); overflow-wrap: anywhere; }
   .stat-unit { font-size: 11px; }
   .stat-delta { font-size: 12px; }
   .delta-base { display: none; }   /* 窄屏放不下，基准日期已在下方说明条里 */
@@ -640,11 +706,6 @@ async function exportImage() {
   .block-card { margin-top: 12px; }
   .card-title { font-size: 14px; }
   .card-hint { display: none; }
-
-  .aging-row { flex-wrap: wrap; gap: 6px; }
-  .aging-name { width: auto; font-size: 13px; }
-  .aging-amount { width: auto; font-size: 13px; }
-  .aging-count { width: auto; font-size: 12px; }
 
   :deep(.el-table) { font-size: 11px; min-width: 500px; }
   :deep(.el-table th),

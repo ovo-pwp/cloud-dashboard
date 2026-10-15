@@ -44,6 +44,11 @@
       共 <b>{{ total }}</b> 条 · 金额 <b class="amount">{{ fmt(detailSum) }}</b> 元
     </div>
 
+    <!-- 列宽按「内容实际需要的宽度」定（2026-10-10 实测）：
+         以前平台列 110px < 需要的 114px，导致「齐心-瑞莱奈康」折成两行、
+         行高一会 40 一会 63；而金额列 140px 却只用到 96px，白白浪费。
+         12 列 + 长文本一屏放不下，就让它横向滚动（明细表本来就该这样），
+         而不是硬挤到折行。所有列不换行，长文本走 tooltip。 -->
     <el-table
       :data="records"
       border
@@ -51,24 +56,26 @@
       style="width: 100%"
       :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
     >
-      <el-table-column type="index" label="#" width="55" align="center" />
-      <el-table-column prop="platform" label="平台" width="110" align="center" />
+      <!-- 行号固定在左侧：往右滑看状态列时还能知道是第几行 -->
+      <el-table-column type="index" label="#" width="55" align="center" fixed="left" />
+      <el-table-column prop="platform" label="平台" width="120" align="center" show-overflow-tooltip />
       <el-table-column prop="orderDate" label="订单日期" width="105" align="center" />
-      <el-table-column prop="orderNo" label="订单号" min-width="140" show-overflow-tooltip />
-      <el-table-column label="客户" min-width="150" show-overflow-tooltip>
+      <!-- 订单号是唯一的单据标识，给足 200px 完整显示，不截断 -->
+      <el-table-column prop="orderNo" label="订单号" width="200" show-overflow-tooltip />
+      <el-table-column label="客户" min-width="200" show-overflow-tooltip>
         <template #default="{ row }">{{ row.customerName || row.accountCustomer || '—' }}</template>
       </el-table-column>
-      <el-table-column prop="accountCustomer" label="平台账号客户" min-width="140" show-overflow-tooltip />
-      <el-table-column prop="product" label="商品" min-width="160" show-overflow-tooltip />
-      <el-table-column prop="qty" label="数量" width="80" align="right" />
-      <el-table-column prop="amountTotal" label="金额(元)" width="140" align="right">
+      <el-table-column prop="accountCustomer" label="平台账号客户" min-width="180" show-overflow-tooltip />
+      <el-table-column prop="product" label="商品" min-width="200" show-overflow-tooltip />
+      <el-table-column prop="qty" label="数量" width="70" align="right" />
+      <el-table-column prop="amountTotal" label="金额(元)" width="120" align="right">
         <template #default="{ row }">
           <span :class="row.amountTotal < 0 ? 'negative' : 'amount'">{{ fmt(row.amountTotal) }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="salesperson" label="业务员" width="100" align="center" />
-      <el-table-column prop="paymentStatus" label="回款状态" width="90" align="center" />
-      <el-table-column prop="invoiceStatus" label="开票状态" width="90" align="center" />
+      <el-table-column prop="salesperson" label="业务员" width="100" align="center" show-overflow-tooltip />
+      <el-table-column prop="paymentStatus" label="回款状态" width="95" align="center" />
+      <el-table-column prop="invoiceStatus" label="开票状态" width="95" align="center" />
     </el-table>
 
     <div class="pagination">
@@ -201,6 +208,11 @@ useAutoRefresh(loadData)
 .amount { font-weight: 600; color: #f56c6c; }
 .negative { font-weight: 600; color: #67c23a; }
 .pagination { margin-top: 16px; display: flex; justify-content: flex-end; }
+
+/* 明细表：所有单元格一律不换行。
+   以前「平台」列只差 4px 就折成两行，整张表行高一会有 40 一会 63，很花。
+   宽度不够就让表格横向滚动 —— 明细表本来就该这样，别硬挤到折行。 */
+:deep(.el-table .cell) { white-space: nowrap; }
 
 /* 移动端适配 */
 @media (max-width: 768px) {

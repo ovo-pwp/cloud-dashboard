@@ -60,8 +60,8 @@
       <el-card shadow="never" class="block">
         <template #header>
           <div class="card-head">
-            <b>催收顺序（风险分倒序）</b>
-            <span class="head-sub">风险分 = 金额(万) × 账龄系数，用于排序而非金额衡量</span>
+            <b>催收顺序（账龄优先）</b>
+            <span class="toolbar-desc">按账龄排序：3个月以上 → 当月；同账龄内金额大优先</span>
             <div class="head-right">
               <span class="muted">显示前</span>
               <el-select v-model="limit" size="small" style="width: 88px" @change="load">
@@ -73,6 +73,22 @@
             </div>
           </div>
         </template>
+
+        <!-- ====== 筛选栏 ====== -->
+        <div class="filter-bar">
+          <el-select v-model="filterAging" placeholder="全部账龄" clearable size="small" style="width: 140px" @change="load">
+            <el-option label="3个月以上" value="3个月以上" />
+            <el-option label="3个月" value="3个月" />
+            <el-option label="2个月" value="2个月" />
+            <el-option label="1个月" value="1个月" />
+            <el-option label="当月" value="当月" />
+          </el-select>
+          <el-select v-model="filterSalesperson" placeholder="全部业务员" clearable filterable size="small" style="width: 160px" @change="load">
+            <el-option v-for="sp in salespersonOptions" :key="sp" :label="sp" :value="sp" />
+          </el-select>
+          <el-input v-model="filterKeyword" placeholder="搜客户 / 单据号" clearable size="small" style="width: 200px" @clear="load" @keyup.enter="load" />
+          <el-button size="small" @click="resetFilter">重置</el-button>
+        </div>
 
         <el-table
           :data="rows"
@@ -99,9 +115,9 @@
           <el-table-column label="金额(元)" width="140" align="right">
             <template #default="{ row }">{{ money(row.amount) }}</template>
           </el-table-column>
-          <el-table-column label="风险分" width="100" align="right">
+          <el-table-column label="风险分" width="90" align="right">
             <template #default="{ row }">
-              <b class="score">{{ row.score.toFixed(2) }}</b>
+              <span class="score">{{ row.agingWeight.toFixed(2) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="城市" prop="city" width="100" align="center">
@@ -160,8 +176,8 @@
         <template #header><b>这张清单怎么来的</b></template>
         <div class="plan-text">
           <ul>
-            <li><b>风险分</b> = 金额（取「万」为单位）× 账龄系数。系数：3个月以上 1.0 / 3个月 0.75 / 2个月 0.55 / 1个月 0.35 / 当月 0.15。</li>
-            <li>金额取本业务线的<b>「销售金额合计」口径</b>，与「数据概览」页一致，不含客户平台线（口径不同，不混算）。</li>
+            <li><b>账龄系数</b>：3个月以上 1.0 / 3个月 0.75 / 2个月 0.55 / 1个月 0.35 / 当月 0.15。用于显示优先级权重。</li>
+            <li>金额取本业务线的<b>「销售金额合计」口径</b>，与「数据总览」页一致，不含客户平台线（口径不同，不混算）。</li>
             <li><b>账龄</b>按快照当月月末为基准反推：≥90 天 = 3个月以上，≥60 = 2个月，≥30 = 1个月，其余为当月。</li>
             <li><b>小额长尾</b>指账龄 ≥2 个月且金额 &lt; 1 万元的单据 —— 催收成本可能高于欠款本身，建议单独批量处理。</li>
             <li>本页为<b>只读清单</b>，不写回任何表；数据随同步更新。</li>
@@ -181,6 +197,9 @@ import PageHeader from '@/components/PageHeader.vue'
 const loading = ref(true)
 const bizType = ref('billed_unpaid')
 const limit = ref(20)
+const filterAging = ref('')
+const filterSalesperson = ref('')
+const filterKeyword = ref('')
 
 const snapshotDate = ref('')
 const rows = ref([])
@@ -197,6 +216,11 @@ const summary = ref({
 
 const totalOver3m = computed(() => salespersons.value.reduce((s, p) => s + (p.over3m || 0), 0))
 const maxOver3m = computed(() => Math.max(1, ...salespersons.value.map((p) => p.over3m || 0)))
+
+/** 业务员筛选选项：从数据中自动提取去重列表 */
+const salespersonOptions = computed(() =>
+  [...new Set(rows.value.map((r) => r.salesperson).filter(Boolean))].sort()
+)
 
 /** 一句话结论：把三个数拼成老板能直接读的句子 */
 const verdictHtml = computed(() => {
@@ -249,9 +273,11 @@ function spRowClass({ row, rowIndex }) {
 async function load() {
   loading.value = true
   try {
-    const res = await request.get('/priority/actions', {
-      params: { bizType: bizType.value, limit: limit.value },
-    })
+    const params = { bizType: bizType.value, limit: limit.value }
+    if (filterAging.value) params.filterAging = filterAging.value
+    if (filterSalesperson.value) params.filterSalesperson = filterSalesperson.value
+    if (filterKeyword.value) params.filterKeyword = filterKeyword.value
+    const res = await request.get('/priority/actions', { params })
     snapshotDate.value = res.snapshotDate || ''
     rows.value = res.rows || []
     salespersons.value = res.salespersons || []
@@ -262,6 +288,13 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+function resetFilter() {
+  filterAging.value = ''
+  filterSalesperson.value = ''
+  filterKeyword.value = ''
+  load()
 }
 
 onMounted(load)

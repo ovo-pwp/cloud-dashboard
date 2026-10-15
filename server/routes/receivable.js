@@ -422,6 +422,46 @@ router.get('/summary', async (req, res, next) => {
 
     const r = nums(rows[0])
 
+    // ---- 业务员排名（2026-10-10 新增，「我的业绩」第 4 张卡用）----
+    // 口径（使用者 2026-10-10 定）：
+    //   · 按「未回款总额」倒序
+    //   · 并列同名次（RANK）—— 不用 ROW_NUMBER，否则并列时会凭空吃掉一个名次
+    //   · 「大客户中心」算一个参评单位；「未指定」（源表没填业务员）**不算**
+    //   · 只在传了 salesperson 时返回：不传是「看全公司」，没有「我的名次」这回事
+    let rank = null
+    if (salesperson) {
+      const rk = await query(
+        `WITH agg AS (
+           SELECT salesperson, SUM(amount_total) AS total
+             FROM receivable_detail
+            WHERE batch_id = $1
+              AND COALESCE(TRIM(salesperson), '') <> ''
+              AND TRIM(salesperson) <> '未指定'
+            GROUP BY salesperson
+         ), ranked AS (
+           SELECT salesperson,
+                  total,
+                  RANK()     OVER (ORDER BY total DESC) AS pos,
+                  COUNT(*)   OVER ()                    AS of_count,
+                  SUM(total) OVER ()                    AS pool_total
+             FROM agg
+         )
+         SELECT pos, of_count, pool_total FROM ranked WHERE salesperson = $2`,
+        [batch.id, salesperson]
+      )
+      const row = rk.rows[0]
+      if (row) {
+        rank = {
+          position: Number(row.pos),
+          of: Number(row.of_count),
+          poolTotal: Number(row.pool_total),
+          // 占比的分母用「参评池」而不是整批合计：池里不含「未指定」，
+          // 这样分子分母和名次是同一口径
+          share: Number(row.pool_total) > 0 ? Number(r.total) / Number(row.pool_total) : 0,
+        }
+      }
+    }
+
     // ---- 上期对比（2026-09-29 新增）----
     // 口径要点：
     //   1) 与本期用**同一个 where**（同一业务员过滤），否则「个人 vs 全公司」没有意义
@@ -470,6 +510,8 @@ router.get('/summary', async (req, res, next) => {
       skippedCount: Number(batch.skipped_count),
       /** 单均金额放后端算，保证「本期」和「上期」用同一个公式 */
       avgAmount: r.doc_count > 0 ? r.total / r.doc_count : null,
+      // 未回款总额的名次（未传 salesperson 时为 null）
+      rank,
       prev,
     })
   } catch (err) {
@@ -532,7 +574,35 @@ router.get('/aging-summary', async (req, res, next) => {
       [batch.id]
     )
     const total = rows.reduce((s, r) => s + r.total, 0)
-    res.json({ records: rows, total, bizType, snapshotDate: batch.snapshot_date })
+
+    // ---- 上期同口径（2026-10-12 新增，给「账龄结构」每档加「较上期」）----
+    // 口径与 /summary 的卡片环比**完全一致**：同一个 getPrevBatch（上一个可用批次，
+    // 不是「昨天」）。两处若用不同基准，页面会出现「卡片说涨、结构说跌」的矛盾读数。
+    // 取不到上期 → prev: null，前端整列不渲染，**不显示 0.0%**。
+    let prev = null
+    const prevBatch = await getPrevBatch(bizType, batch.snapshot_date)
+    if (prevBatch) {
+      const prevRows = (await query(
+        `SELECT COALESCE(aging_category, '未分类') AS category,
+                SUM(amount_total)::float8 AS total
+           FROM receivable_detail
+          WHERE batch_id = $1
+          GROUP BY COALESCE(aging_category, '未分类')`,
+        [prevBatch.id]
+      )).rows
+      prev = {
+        snapshotDate: prevBatch.snapshot_date,
+        byCategory: Object.fromEntries(prevRows.map((r) => [r.category, Number(r.total || 0)])),
+      }
+    }
+
+    res.json({
+      records: rows,
+      total,
+      bizType,
+      snapshotDate: batch.snapshot_date,
+      prev,
+    })
   } catch (err) {
     next(err)
   }
@@ -587,16 +657,48 @@ function buildDetailFilter(req, batchId) {
 }
 
 /** 明细排序白名单，防注入 */
+/**
+ * 账龄排序键：按「哪一档有金额」定序，老 → 新（3个月以上 排最前）。
+ *
+ * 为什么不用 doc_date 排：账龄分档取自**源表自带的 5 个金额列**
+ *   （over3m / 3m / 2m / 1m / current），按日期排只在正好按月对齐时才与分档一致，
+ *   跨月边界会错位。
+ * 为什么不用 aging_category 文本排：源里同一档有多种写法
+ *   （「三个月以上未回款」「3个月以上」），按文本排会乱序。
+ */
+const AGING_ORDER_SQL = `CASE
+          WHEN amount_over3m  <> 0 THEN 1
+          WHEN amount_3m      <> 0 THEN 2
+          WHEN amount_2m      <> 0 THEN 3
+          WHEN amount_1m      <> 0 THEN 4
+          WHEN amount_current <> 0 THEN 5
+          ELSE 6 END`
+
 const DETAIL_SORTABLE = {
   amountTotal: 'amount_total',
   docDate: 'doc_date',
   docNo: 'doc_no',
   customer: 'customer_name',
+  // 前端「账龄」列的表头点击排序走这个键
+  agingCategory: AGING_ORDER_SQL,
   over3m: 'amount_over3m',
   m3: 'amount_3m',
   m2: 'amount_2m',
   m1: 'amount_1m',
   currentMonth: 'amount_current',
+}
+
+/**
+ * 明细 ORDER BY 子句（白名单查表，不拼接用户输入）。
+ *
+ * 默认 = 账龄（老 → 新）+ 同档内金额从大到小。传了白名单外的 sortBy 也回落到默认。
+ * 末尾固定加 id ASC：分页时如果没有唯一键兜底，金额相同的行在不同页会重复/漏掉。
+ */
+function detailOrderBy(sortBy, sortOrder) {
+  const known = sortBy && Object.prototype.hasOwnProperty.call(DETAIL_SORTABLE, sortBy)
+  if (!known) return `${AGING_ORDER_SQL} ASC, amount_total DESC, id ASC`
+  const dir = String(sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC'
+  return `${DETAIL_SORTABLE[sortBy]} ${dir}, amount_total DESC, id ASC`
 }
 
 /** 明细导出列（与「明细查询」页表格逐列对应） */
@@ -657,8 +759,7 @@ router.get('/detail', async (req, res, next) => {
     const { page = 1, pageSize = 20 } = req.query
     const { where, params } = buildDetailFilter(req, batch.id)
 
-    const sortCol = DETAIL_SORTABLE[req.query.sortBy] || 'amount_total'
-    const sortDir = String(req.query.sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC'
+    const orderBy = detailOrderBy(req.query.sortBy, req.query.sortOrder)
 
     const countRes = await query(
       `SELECT COUNT(*)           AS cnt,
@@ -711,7 +812,7 @@ router.get('/detail', async (req, res, next) => {
          data_warning                        AS "warning"
        FROM receivable_detail
       WHERE ${where}
-      ORDER BY ${sortCol} ${sortDir}
+      ORDER BY ${orderBy}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     )
@@ -822,9 +923,7 @@ router.get('/export/detail', requireRole(...CAN_EXPORT), async (req, res, next) 
       `SELECT ${DETAIL_EXPORT_SELECT}
          FROM receivable_detail
         WHERE ${where}
-        ORDER BY ${DETAIL_SORTABLE[req.query.sortBy] || 'amount_total'} ${
-          String(req.query.sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC'
-        }`,
+        ORDER BY ${detailOrderBy(req.query.sortBy, req.query.sortOrder)}`,
       params
     )
 
@@ -882,6 +981,14 @@ router.get('/filters', async (req, res, next) => {
       return res.json({ salespeople: [], customers: [], agingCategories: [], cities: [], bizType })
     }
 
+    // 可选按业务员过滤「客户」候选：「我的业绩」页只想列这个人自己的客户，
+    // 下拉里塞全公司的客户会很难找。其余列表不受影响（不传 salesperson 时行为不变）
+    const filterSp = String(req.query.salesperson || '').trim()
+    const cuParams = filterSp ? [batch.id, filterSp] : [batch.id]
+    const cuWhere = filterSp
+      ? 'batch_id = $1 AND salesperson = $2'
+      : 'batch_id = $1'
+
     const [sp, cu, ag, ct] = await Promise.all([
       query(
         `SELECT DISTINCT salesperson, department FROM receivable_detail
@@ -890,8 +997,8 @@ router.get('/filters', async (req, res, next) => {
       ),
       query(
         `SELECT DISTINCT customer_name FROM receivable_detail
-          WHERE batch_id = $1 ORDER BY customer_name`,
-        [batch.id]
+          WHERE ${cuWhere} ORDER BY customer_name`,
+        cuParams
       ),
       query(
         `SELECT DISTINCT COALESCE(aging_category,'未分类') AS cat FROM receivable_detail
@@ -919,8 +1026,29 @@ router.get('/filters', async (req, res, next) => {
 })
 
 // ------------------------------------------------------------
-// GET /api/trend  每日快照趋势（可指定 bizType，不传则返回全部）
+// GET /api/trend  每日快照趋势
+//
+//   2026-10-10 起改为**按日期透视**：一行 = 一个快照日期，两条业务线并排。
+//   以前是「一行 = 一个批次」，同一个日期占两行，横着看不出两条线的关系。
+//
+//   🔴 「回款」「已开票」在库里**没有现成字段**，是推算出来的：
+//      源表是「未回款 / 未开票」的**快照** —— 一笔单收回款（或开完票）后，
+//      它就从表里**消失**。所以逐单对比相邻两批：
+//        回款   = 上一批有、本批消失的单（整笔） + 本批金额变小的单（部分）
+//        已开票 = 未开票线同理（消失 / 变小）
+//      匹配键 = doc_no | customer_name | doc_date（实测在批次内唯一）。
+//      恒等式：推定新增 − 推定回款 = 余额差（实测 5 组相邻批次全部为 0）。
+//
+//   ⚠️ 固有风险：「源表人工改数」会被算成回款。例如某单金额从 1 万改成 8 千（纠错），
+//      这里会记成「回款 2 千」。目前实测噪声为 0，但无法根除 —— 用的时候要心里有数。
+//   ⚠️ 「本批较上批」≠「今日」：同步不是每天都有（国庆断档），一天也可能跑多批
+//      （同类型同日覆盖，只留最后一批）。所以返回值带 prevSnapshotDate，
+//      前端必须把基准日期显示出来，否则会被读成「昨天」。
 // ------------------------------------------------------------
+function round2(n) {
+  return Math.round(n * 100) / 100
+}
+
 router.get('/trend', async (req, res, next) => {
   try {
     const bizType = req.query.bizType
@@ -931,20 +1059,114 @@ router.get('/trend', async (req, res, next) => {
       where = 'WHERE biz_type = $1'
     }
 
-    const { rows } = await query(
-      `SELECT biz_type AS "bizType",
+    const batches = (await query(
+      `SELECT id,
+              biz_type AS "bizType",
               to_char(snapshot_date, 'YYYY-MM-DD') AS "snapshotDate",
               row_count AS "rowCount",
               total_amount::float8 AS "totalAmount",
-              skipped_count AS "skippedCount",
               source_file AS "sourceFile",
               imported_at AS "importedAt"
          FROM import_batch
          ${where}
-        ORDER BY biz_type, snapshot_date ASC`,
+        ORDER BY biz_type, snapshot_date, id`,
       params
+    )).rows
+
+    if (!batches.length) return res.json([])
+
+    // 一次把涉及的明细按「批次 × 单据键」聚合出来（约 20 批 × 几百行，量很小）。
+    // 不用「逐对批次各查一次」是为了避免 N+1：批次会随时间线性增长。
+    const ids = batches.map((b) => b.id)
+    const detail = (await query(
+      `SELECT batch_id AS "batchId",
+              doc_no || '|' || customer_name || '|' ||
+                COALESCE(to_char(doc_date, 'YYYY-MM-DD'), '') AS k,
+              SUM(amount_total)::float8 AS amt
+         FROM receivable_detail
+        WHERE batch_id = ANY($1::int[])
+        GROUP BY 1, 2`,
+      [ids]
+    )).rows
+
+    const byBatch = new Map()
+    for (const d of detail) {
+      if (!byBatch.has(d.batchId)) byBatch.set(d.batchId, new Map())
+      byBatch.get(d.batchId).set(d.k, Number(d.amt))
+    }
+
+    // 「1个月以上」小计 = over3m + 3m + 2m + 1m（**不含当月**）
+    //
+    // 2026-10-13 使用者要求：「每日趋势换成按 1个月以上 统计，不要当月的，因为单月的只有上升到趋势」。
+    // 原因（实测）：当月档在月内只进不出、逐日堆高，把总额的趋势盖住了 ——
+    //   未回款总额 10-08 5,738,243 → 10-09 6,082,993 → 10-10 6,603,724（一路被当月顶上）
+    //   而同期「1个月以上」5,733,162 → 5,592,832 → 5,566,455（才是真在降）
+    // 所以趋势的**对比基准改成 1个月以上**，`flow`（回款/已开票）**保持全量口径不动**
+    // （那是单据层面的进出，与账龄档无关 —— 使用者 10-13 定的）。
+    const over1mByBatch = new Map(
+      (await query(
+        `SELECT batch_id AS "batchId",
+                SUM(amount_over3m + amount_3m + amount_2m + amount_1m)::float8 AS "over1m"
+           FROM receivable_detail
+          WHERE batch_id = ANY($1::int[])
+          GROUP BY 1`,
+        [ids]
+      )).rows.map((r) => [r.batchId, Number(r.over1m || 0)])
     )
-    res.json(rows)
+
+    // 按业务线、按时间顺序做「相邻两批」的差
+    const groups = new Map()
+    for (const b of batches) {
+      if (!groups.has(b.bizType)) groups.set(b.bizType, [])
+      groups.get(b.bizType).push(b)
+    }
+
+    const stat = new Map() // batchId -> { flow, prevSnapshotDate, delta, deltaPct }
+    for (const arr of groups.values()) {
+      for (let i = 0; i < arr.length; i++) {
+        const b = arr[i]
+        const s = { flow: null, prevSnapshotDate: null, delta: null, deltaPct: null }
+        if (i > 0) {
+          const prev = arr[i - 1]
+          const pm = byBatch.get(prev.id) || new Map()
+          const cm = byBatch.get(b.id) || new Map()
+          let flow = 0
+          for (const [k, v] of pm) {
+            if (!cm.has(k)) flow += v // 整笔消失 = 已回款 / 已开票
+            else if (cm.get(k) < v - 0.005) flow += v - cm.get(k) // 部分回款 / 冲减
+          }
+          s.flow = round2(flow)
+          s.prevSnapshotDate = prev.snapshotDate
+          // 环比基准 = 「1个月以上」小计，**不是**总额（见 over1mByBatch 的说明）
+          const cur1m = over1mByBatch.get(b.id) || 0
+          const prev1m = over1mByBatch.get(prev.id) || 0
+          s.delta = round2(cur1m - prev1m)
+          s.deltaPct = prev1m !== 0 ? Math.round((s.delta / prev1m) * 10000) / 100 : null
+        }
+        stat.set(b.id, s)
+      }
+    }
+
+    // 透视：一个快照日期一行
+    const byDate = new Map()
+    for (const b of batches) {
+      if (!byDate.has(b.snapshotDate)) byDate.set(b.snapshotDate, { snapshotDate: b.snapshotDate })
+      const s = stat.get(b.id)
+      byDate.get(b.snapshotDate)[b.bizType] = {
+        total: round2(b.totalAmount),
+        /** 「1个月以上」小计（不含当月）—— 2026-10-13 起趋势页显示与对比都用它 */
+        over1m: round2(over1mByBatch.get(b.id) || 0),
+        rowCount: b.rowCount,
+        flow: s.flow, // 回款 / 已开票（推算值，全量口径；第一个批次没有上一批 → null）
+        delta: s.delta,
+        deltaPct: s.deltaPct,
+        prevSnapshotDate: s.prevSnapshotDate,
+        sourceFile: b.sourceFile,
+        importedAt: b.importedAt,
+      }
+    }
+
+    res.json([...byDate.values()].sort((a, b) => b.snapshotDate.localeCompare(a.snapshotDate)))
   } catch (err) {
     next(err)
   }
@@ -1293,6 +1515,38 @@ router.get('/customer-platform-unpaid/salespersons', async (req, res, next) => {
       [snapshot]
     )
     res.json({ salespersons: rows.map((r) => r.salesperson) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/customer-platform-unpaid/customers  客户列表（筛选用，可选按业务员过滤）
+//
+//   客户口径必须与明细、汇总**完全一致**：
+//     COALESCE(NULLIF(account_customer,''), customer_name, '未知客户')
+//   三处写法不一致的话，下拉里选出来的名字在明细里一行都过滤不到。
+//   与「销售管理」线一样，传了 salesperson 就只列这个人的客户。
+router.get('/customer-platform-unpaid/customers', async (req, res, next) => {
+  try {
+    const snapshot = await getCpuLatestSnapshot()
+    if (!snapshot) return res.json({ customers: [], snapshotDate: null })
+
+    const salesperson = String(req.query.salesperson || '').trim()
+    const params = [snapshot]
+    let where = 'snapshot_date = $1'
+    if (salesperson) {
+      params.push(salesperson)
+      where += ` AND salesperson = $${params.length}`
+    }
+
+    const { rows } = await query(
+      `SELECT DISTINCT COALESCE(NULLIF(account_customer,''), customer_name, '未知客户') AS name
+         FROM customer_platform_unpaid
+        WHERE ${where}
+        ORDER BY name`,
+      params
+    )
+    res.json({ customers: rows.map((r) => r.name), snapshotDate: snapshot })
   } catch (err) {
     next(err)
   }
@@ -1676,7 +1930,29 @@ router.get('/priority/actions', async (req, res, next) => {
     const batch = await getLatestBatch(bizType)
     if (!batch) return res.json({ rows: [], summary: null, bizType, snapshotDate: null })
 
+    // 筛选条件
+    const filterAging = req.query.filterAging || null
+    const filterSalesperson = req.query.filterSalesperson || null
+    const filterKeyword = req.query.filterKeyword || null
+
     // 只取筛选需要的列；金额用 amount_total（该表口径，与 /summary 一致）
+    let whereClause = `WHERE batch_id = $1`
+    const params = [batch.id]
+    let paramIdx = 2
+
+    if (filterAging) {
+      whereClause += ` AND aging_category ILIKE $${paramIdx++}`
+      params.push(`%${filterAging}月%`)
+    }
+    if (filterSalesperson) {
+      whereClause += ` AND salesperson = $${paramIdx++}`
+      params.push(filterSalesperson)
+    }
+    if (filterKeyword) {
+      whereClause += ` AND (customer_name ILIKE $${paramIdx++} OR doc_no ILIKE $${paramIdx++})`
+      params.push(`%${filterKeyword}%`, `%${filterKeyword}%`)
+    }
+
     const { rows } = await query(
       `SELECT doc_no                              AS "docNo",
               to_char(doc_date,'YYYY-MM-DD')      AS "docDate",
@@ -1687,8 +1963,8 @@ router.get('/priority/actions', async (req, res, next) => {
               COALESCE(follow_up_note,'')         AS "note",
               amount_total::float8                AS "amount"
          FROM receivable_detail
-        WHERE batch_id = $1`,
-      [batch.id]
+        ${whereClause}`,
+      params
     )
 
     // 阈值：可配置，默认 1 万以下视为「小额长尾」（催收成本可能高于欠款本身）
@@ -1707,8 +1983,14 @@ router.get('/priority/actions', async (req, res, next) => {
     const all = enriched.filter((r) => r.amount > 0)
     const totalAmount = all.reduce((s, r) => s + r.amount, 0)
 
-    // TOP 清单：按风险分倒序（就是「先打哪个电话」的顺序）
-    const top = [...all].sort((a, b) => b.score - a.score).slice(0, limit)
+    // 按账龄优先排序：越老越优先（3个月以上 > 3个月 > ... > 当月）
+    // 同账龄内按金额倒序，让催收优先级更清晰
+    const agingOrder = { '3个月以上': 0, '3个月': 1, '2个月': 2, '1个月': 3, '当月': 4 }
+    const top = [...all].sort((a, b) => {
+      const diff = (agingOrder[a.aging] ?? 99) - (agingOrder[b.aging] ?? 99)
+      if (diff !== 0) return diff
+      return b.amount - a.amount  // 同账龄内金额大的优先
+    }).slice(0, limit)
 
     // 大额集中度：前 N 笔占总额多少 —— 用来回答「是不是几笔就决定了全局」
     const top10 = [...all].sort((a, b) => b.amount - a.amount).slice(0, 10)
@@ -1748,6 +2030,171 @@ router.get('/priority/actions', async (req, res, next) => {
         smallOldAmount: Math.round(smallOldSum * 100) / 100,
       },
     })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ------------------------------------------------------------
+// GET /api/trace  单号追溯（2026-10-12 新增，使用者要求）
+//
+//   为什么需要它：
+//     明细页的搜索框只查**最新批**（`batch_id = 当前批`），
+//     而「查一笔账」要查的往往正是**已经从源表消失**的单（结清 / 删单 / 改数 / 挪到另一条线）。
+//     实测：`2026-550` 已消失 ⇒ 明细页两条线都搜不到（0 条），当时只能连数据库查。
+//
+//   行为：
+//     · 两条业务线**都查**（使用者一般不知道单子在哪个线）
+//     · 先精确匹配 doc_no；精确无结果再返回模糊候选（最多 20 个，点一下就查）
+//     · 精确命中时，把该单在**全部历史批次**里的快照按日期连成时间线，
+//       并标出「第一次出现 / 最后一次出现 / 当前最新批还在不在」
+//   权限：只读，登录即可（与明细页同级）。
+// ------------------------------------------------------------
+const TRACE_MAX_CANDIDATES = 20
+
+/** ILIKE 的通配符必须转义，否则用户输入一个 % 会把整库捞出来 */
+function escapeLike(s) {
+  return String(s).replace(/[\\%_]/g, (m) => '\\' + m)
+}
+
+router.get('/trace', async (req, res, next) => {
+  try {
+    const raw = String(req.query.docNo ?? '').trim()
+    if (!raw) return res.status(400).json({ error: '请输入单据编号' })
+    if (raw.length > 60) return res.status(400).json({ error: '单据编号过长（最多 60 字）' })
+
+    // 各业务线的当前最新批：用来判断「这单现在还在不在最新批里」
+    const latest = {}
+    for (const r of (await query(
+      `SELECT biz_type, id, to_char(snapshot_date,'YYYY-MM-DD') AS d,
+              ROW_NUMBER() OVER (PARTITION BY biz_type ORDER BY snapshot_date DESC, id DESC) AS rn
+         FROM import_batch`
+    )).rows) {
+      if (Number(r.rn) === 1) latest[r.biz_type] = { id: r.id, date: r.d }
+    }
+
+    const { rows } = await query(
+      `SELECT d.biz_type,
+              d.doc_no,
+              b.snapshot_date::text            AS snapshot_date,
+              b.id                             AS batch_id,
+              MAX(d.customer_name)             AS customer_name,
+              MAX(d.salesperson)               AS salesperson,
+              MAX(d.aging_category)            AS aging_category,
+              MAX(d.city)                      AS city,
+              MAX(d.doc_date)::text            AS doc_date,
+              SUM(d.amount_total)::float8      AS amount,
+              SUM(d.amount_over3m)::float8     AS over3m,
+              SUM(d.amount_3m)::float8         AS m3,
+              SUM(d.amount_2m)::float8         AS m2,
+              SUM(d.amount_1m)::float8         AS m1,
+              SUM(d.amount_current)::float8    AS cur,
+              COUNT(*)::int                    AS dup_rows
+         FROM receivable_detail d
+         JOIN import_batch b ON b.id = d.batch_id
+        WHERE d.doc_no ILIKE $1 ESCAPE '\\'
+        GROUP BY d.biz_type, d.doc_no, b.snapshot_date, b.id
+        ORDER BY d.biz_type, b.snapshot_date, b.id
+        LIMIT 2000`,
+      [`%${escapeLike(raw)}%`]
+    )
+
+    const distinct = [...new Set(rows.map((r) => r.doc_no))]
+    const exactDocs = distinct.filter((d) => d.toLowerCase() === raw.toLowerCase())
+
+    // ---- 精确没中：给候选，让使用者点一下就能查 ----
+    if (!exactDocs.length) {
+      if (!rows.length) {
+        return res.json({ query: raw, match: 'none', series: [], candidates: [], latest })
+      }
+      const byDoc = new Map()
+      for (const r of rows) {
+        const k = r.biz_type + '|' + r.doc_no
+        const prev = byDoc.get(k)
+        if (!prev || r.snapshot_date > prev.lastDate) {
+          byDoc.set(k, {
+            docNo: r.doc_no,
+            bizType: r.biz_type,
+            bizLabel: BIZ_TYPES[r.biz_type] || r.biz_type,
+            customerName: r.customer_name,
+            salesperson: r.salesperson,
+            lastDate: r.snapshot_date,
+            lastAmount: Number(r.amount || 0),
+            inLatest: latest[r.biz_type]?.id === r.batch_id,
+          })
+        }
+      }
+      const candidates = [...byDoc.values()]
+        .sort((a, b) => (b.lastDate || '').localeCompare(a.lastDate || ''))
+        .slice(0, TRACE_MAX_CANDIDATES)
+      return res.json({
+        query: raw,
+        match: 'fuzzy',
+        series: [],
+        candidates,
+        candidatesTruncated: byDoc.size > candidates.length,
+        candidatesTotal: byDoc.size,
+        latest,
+      })
+    }
+
+    // ---- 精确命中：连成时间线 ----
+    const wanted = new Set(exactDocs.map((d) => d.toLowerCase()))
+    const groups = new Map()
+    for (const r of rows) {
+      if (!wanted.has(r.doc_no.toLowerCase())) continue
+      const k = r.biz_type + '|' + r.doc_no
+      if (!groups.has(k)) groups.set(k, [])
+      groups.get(k).push(r)
+    }
+
+    const series = [...groups.values()].map((pts) => {
+      const first = pts[0]
+      const last = pts[pts.length - 1]
+      const cur = latest[first.biz_type]
+      const points = pts.map((p, i) => {
+        const amount = Number(p.amount || 0)
+        const prevAmount = i > 0 ? Number(pts[i - 1].amount || 0) : null
+        // 与上一次**出现过**的批次比 —— 同一单不会每批都出现，所以基准是「上一次出现」而不是「上一批」
+        const delta = prevAmount === null ? null : Math.round((amount - prevAmount) * 100) / 100
+        return {
+          snapshotDate: p.snapshot_date,
+          batchId: p.batch_id,
+          amount: Math.round(amount * 100) / 100,
+          delta,
+          agingCategory: p.aging_category,
+          salesperson: p.salesperson,
+          customerName: p.customer_name,
+          city: p.city,
+          docDate: p.doc_date,
+          buckets: {
+            over3m: Number(p.over3m || 0), m3: Number(p.m3 || 0), m2: Number(p.m2 || 0),
+            m1: Number(p.m1 || 0), cur: Number(p.cur || 0),
+          },
+          dupRows: p.dup_rows > 1 ? p.dup_rows : 0,
+        }
+      })
+      return {
+        bizType: first.biz_type,
+        bizLabel: BIZ_TYPES[first.biz_type] || first.biz_type,
+        docNo: first.doc_no,
+        customerName: last.customer_name,
+        salesperson: last.salesperson,
+        city: last.city,
+        docDate: last.doc_date,
+        points,
+        appearedBatches: points.length,
+        firstDate: first.snapshot_date,
+        lastDate: last.snapshot_date,
+        inLatest: cur ? cur.id === last.batch_id : false,
+        latestBatchDate: cur?.date || null,
+        lastAgingCategory: last.aging_category,
+      }
+    })
+    // 仍在最新批的排前面
+    series.sort((a, b) => Number(b.inLatest) - Number(a.inLatest) || a.docNo.localeCompare(b.docNo))
+
+    res.json({ query: raw, match: 'exact', series, candidates: [], latest })
   } catch (err) {
     next(err)
   }

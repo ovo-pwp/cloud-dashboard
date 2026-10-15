@@ -40,7 +40,7 @@
         </div>
         <div class="hero-actions">
           <el-button type="primary" size="large" class="cta" @click="go('/home')">
-            <el-icon><DataAnalysis /></el-icon> 进入数据概览
+            <el-icon><DataAnalysis /></el-icon> 进入数据总览
           </el-button>
           <el-button size="large" class="cta ghost" @click="go('/detail')">
             <el-icon><Document /></el-icon> 查询明细
@@ -158,7 +158,7 @@ function go(path) {
 const entries = computed(() => {
   const list = [
     {
-      name: '数据概览', path: '/home', icon: DataAnalysis, primary: true,
+      name: '数据总览', path: '/home', icon: DataAnalysis, primary: true,
       color: 'linear-gradient(135deg,#409eff,#2c6fd1)',
       desc: '业务员 × 账龄段矩阵，一屏看清谁欠得多、欠多久',
     },
@@ -237,10 +237,10 @@ const flow = [
 // ------------------------------------------------------------
 // 注意：这里用 v-html，内容是写死的常量（不含用户输入），不存在注入风险。
 const tips = [
-  '顶部<b>业务类型</b>切换决定「数据概览 / 明细查询 / 每日趋势」三页看的是哪条业务线',
+  '顶部<b>业务类型</b>切换决定「数据总览 / 明细查询 / 每日趋势」三页看的是哪条业务线',
   '金额一律<b>右对齐 + 千分位 + 2 位小数</b>；账龄列颜色固定 <b>红→橙→黄→蓝→绿（老→新）</b>',
   '管理员与成员权限不同：<b>成员不能同步数据、进不了系统管理</b>，但可正常查数、改备注、导 Excel',
-  '「数据概览」右上角<b>导出看板图片</b>可直接生成整页 PNG，发给领导用',
+  '「数据总览」右上角<b>导出看板图片</b>可直接生成整页 PNG，发给领导用',
 ]
 
 // ------------------------------------------------------------
@@ -264,11 +264,13 @@ const onlineTypes = ref('')    // 已有数据的业务线条数，如 2 条
 const shownDate = ref('')    // 滚动中的快照日期（播完 = snapshotDate）
 const shownTypes = ref('')   // 滚动中的业务线数（播完 = onlineTypes）
 let countRaf = 0
+let lastPlayAt = 0           // 上次播放时间戳：用来决定切回标签页时要不要重播
 
 function easeOutExpo(t) { return t === 1 ? 1 : 1 - Math.pow(2, -10 * t) }
 const prefersReduce = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 function runStatAnimations() {
+  lastPlayAt = Date.now()
   if (prefersReduce()) {
     shownDate.value = snapshotDate.value
     shownTypes.value = onlineTypes.value
@@ -278,7 +280,7 @@ function runStatAnimations() {
   // 整数 0 → N：如「3 条」
   const target = parseInt(onlineTypes.value, 10) || 0
   const t0 = performance.now()
-  const dur = 900
+  const dur = 2000
   const tickTypes = (now) => {
     const p = Math.min(1, (now - t0) / dur)
     shownTypes.value = `${Math.round(easeOutExpo(p) * target)} 条`
@@ -289,8 +291,8 @@ function runStatAnimations() {
   // 日期按位滚动：数字位从 0 滚到目标，非数字位（-）直接显示
   const chars = snapshotDate.value.split('')
   const isDigit = (c) => /[0-9]/.test(c)
-  const stagger = 90       // 每位错开 90ms，形成从左到右的滚动感
-  const dur2 = 750
+  const stagger = 260       // 每位错开 260ms，形成从左到右的滚动感
+  const dur2 = 1800
   const t1 = performance.now()
   const tickDate = (now) => {
     const elapsed = now - t1
@@ -311,6 +313,16 @@ function runStatAnimations() {
   }
   countRaf = requestAnimationFrame(tickDate)
 }
+
+// 切回标签页时重播一次数字滚动，保证用户随时回来都能看到动画。
+// 4 秒内的快速切换不重播，避免闪个不停。
+function onVisReplay() {
+  if (document.visibilityState !== 'visible') return
+  if (!snapshotDate.value) return   // 数据还没到，别播空值
+  if (Date.now() - lastPlayAt < 4000) return
+  runStatAnimations()
+}
+document.addEventListener('visibilitychange', onVisReplay)
 
 onMounted(async () => {
   try {
@@ -449,6 +461,7 @@ onBeforeUnmount(() => {
   if (raf) cancelAnimationFrame(raf)
   if (countRaf) cancelAnimationFrame(countRaf)
   if (stopFn) stopFn()
+  document.removeEventListener('visibilitychange', onVisReplay)
 })
 </script>
 

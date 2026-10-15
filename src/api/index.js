@@ -81,6 +81,18 @@ export function getAgingBySalesperson(bizType) {
   return request.get('/aging-by-salesperson', { params: { bizType } })
 }
 
+/**
+ * 两条销售线的「本批 vs 上批」差异（新增 / 补录 / 回款或已开票 / 金额改动）。
+ *
+ * 2026-10-14 提到这里：以前只有 DailyShipPay 内部直接 request.get，现在 /home 的
+ * 「当日回款」卡也要用，统一走这个封装，别再各写各的路径。
+ */
+export function getLineDelta(bizType, salesperson) {
+  const params = { bizType }
+  if (salesperson) params.salesperson = salesperson
+  return request.get('/customer-invoice/line-delta', { params })
+}
+
 /** 账龄分档汇总 */
 export function getAgingSummary(bizType) {
   return request.get('/aging-summary', { params: { bizType } })

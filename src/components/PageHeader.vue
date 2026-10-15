@@ -53,7 +53,9 @@ defineProps({
 // 超过这个时长没成功同步，就标成「陈旧」
 const STALE_MS = 24 * 60 * 60 * 1000
 // 1 分钟刷新一次提示（同步本身是小时级，够用且极轻）
-const TICK_MS = 60 * 1000
+// 2026-10-10：60s → 5min。公网每趟都要绕欧洲节点（约 0.5~1.1s），
+// 页面开着就每分钟白跑一趟，纯浪费带宽。新鲜度按「分钟」展示，5 分钟粒度够用。
+const TICK_MS = 5 * 60 * 1000
 
 const freshness = ref(null)
 let timer = null

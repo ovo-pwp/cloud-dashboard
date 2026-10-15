@@ -108,7 +108,7 @@ const modules = ref([
   {
     id: 1,
     name: '未回款/未开票管理看板',
-    desc: '已开票未回款 · 已发货未开票 · 数据概览 · 明细查询 · 按客户汇总 · 每日趋势',
+    desc: '已开票未回款 · 已发货未开票 · 数据总览 · 明细查询 · 按客户汇总 · 每日趋势',
     path: '/home',
     icon: 'DataAnalysis',
     color: '#2563eb',

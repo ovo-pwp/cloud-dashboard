@@ -134,7 +134,7 @@
           </span>
         </template>
       </el-table-column>
-      <el-table-column prop="agingCategory" label="账龄" width="135" align="center">
+      <el-table-column prop="agingCategory" label="账龄" width="135" align="center" sortable="custom">
         <template #default="{ row }">
           <el-tag :type="agingTagType(row.agingCategory)" size="small" effect="dark">
             {{ row.agingCategory }}
@@ -261,10 +261,11 @@ const dateRange = ref([])
 const editingId = ref(null)
 const editValue = ref('')
 
-// 服务端排序：默认按金额降序（与后端默认一致）
-const sortBy = ref('amountTotal')
-const sortOrder = ref('desc')
-const defaultSortOrder = 'descending'
+// 服务端排序：默认按「账龄」老 → 新（3个月以上 在前），与后端默认一致。
+// 同档内的次序由后端补 amount_total DESC，前端不用管。
+const sortBy = ref('agingCategory')
+const sortOrder = ref('asc')
+const defaultSortOrder = 'ascending'
 
 const filters = reactive({
   salesperson: null,
@@ -322,9 +323,14 @@ function rowClass({ row }) {
 }
 
 function onSortChange({ prop, order }) {
-  // order: 'ascending' | 'descending' | null（取消排序）
-  sortBy.value = prop || 'amountTotal'
-  sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
+  // order: 'ascending' | 'descending' | null（取消排序 → 回到默认的账龄排序）
+  if (!prop || !order) {
+    sortBy.value = 'agingCategory'
+    sortOrder.value = 'asc'
+  } else {
+    sortBy.value = prop
+    sortOrder.value = order === 'ascending' ? 'asc' : 'desc'
+  }
   page.value = 1
   loadData()
 }
@@ -459,8 +465,8 @@ function resetFilters() {
   filters.city = null
   filters.keyword = ''
   dateRange.value = []
-  sortBy.value = 'amountTotal'
-  sortOrder.value = 'desc'
+  sortBy.value = 'agingCategory'
+  sortOrder.value = 'asc'
   reload()
 }
 

@@ -8,6 +8,7 @@
 
 import XLSX from 'xlsx'
 import { todayDate, toDateOnly } from '../utils/date.js'
+import { toCityBatch } from './city.js'
 
 const BIZ_TYPES = {
   billed_unpaid: {
@@ -192,11 +193,20 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
       amount_1m: amount1m,
       amount_current: amountCurrent,
       follow_up_note: toText(r[12]),
-      // 第 14 列 = 源表新增的「地址」（城市名）。未开票那张表没有这列，取到就是 null
+      // 第 14 列 = 源表那一列「地址」。未开票那张表没有这列，取到就是 null。
+      // ⚠️ 源表里填的是**完整地址**（`广西南宁市青秀区古城路39号`），
+      //    循环结束后统一用 toCityBatch 归一化成**只到市**，见下方注释。
       city: toText(r[13]) || null,
       data_warning: dataWarning,
     })
   }
+
+  // ---------- 「地址」→「城市」归一化：只到市（2026-10-12 使用者要求）----------
+  // 放在这里而不是界面：明细列表 / 城市筛选下拉 / 优先级清单 / Excel 导出**四处共用** city，
+  // 只在界面截会导致下拉里是整条地址、而 `WHERE city = $n` 精确匹配筛不出东西。
+  // 规则与逐条核对结论见 services/city.js 顶部注释。
+  const cities = toCityBatch(records.map((r) => r.city))
+  records.forEach((r, i) => { r.city = cities[i] })
 
   const grandTotal = Math.round(sumTotal * 100) / 100
 
@@ -251,10 +261,31 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
     const dbCnt = Number(check.rows[0].cnt)
     const dbTotal = Number(check.rows[0].total)
 
-    if (dbCnt !== records.length || Math.abs(dbTotal - grandTotal) > 0.01) {
+    // 行数必须**完全一致** —— 少一行就是读文件出了问题（列错位 / 尾部被截）
+    // 金额给 ¥0.5 的余量：只为兜住下面的舍入顺序差，抓不出「整列错位」那种级别的问题早已足够
+    if (dbCnt !== records.length || Math.abs(dbTotal - grandTotal) > 0.5) {
       throw new Error(
         `入库校验失败: 期望 ${records.length} 条/${grandTotal}，实际 ${dbCnt} 条/${dbTotal}`
       )
+    }
+
+    // 🔴 批次合计**以库里的精确求和为准**回写（2026-10-12 修）
+    //
+    //    `amount_total` 是 `NUMERIC(16,2)`，Postgres 在 INSERT 时**逐行**四舍五入；
+    //    而上面的 `grandTotal` 是「先累加未舍入的原值、最后再舍入一次」——
+    //    **先加后舍 ≠ 先舍后加**：源表只要出现 3 位以上小数，两者就会差 ¥0.01。
+    //    实测（2026-10-12）：批次合计 11,271,881.24 vs 明细求和 11,271,881.23，
+    //    导致 `npm run test:audit` 的「/summary 与批次记录一致」随机失败（前 7 批都是 0.00，
+    //    说明这是**数据相关**的偶发，不是每次都有）。
+    //
+    //    看板上的每一个环比都是「本批合计 − 上批合计」，而明细页表尾合计走的是
+    //    `SUM(amount_total)`。两者必须严格相等，否则同一屏里两个数对不上。
+    //    所以直接把库里的值写回批次 —— 从此「批次合计 ≡ 明细求和」恒成立。
+    if (Math.abs(dbTotal - grandTotal) > 0) {
+      await client.query('UPDATE import_batch SET total_amount = $2 WHERE id = $1', [
+        batchId,
+        dbTotal,
+      ])
     }
 
     await client.query('COMMIT')

@@ -10,7 +10,7 @@
       class="sidebar"
       :class="{ 'mobile-open': mobileMenuOpen, narrow: isNarrow }"
     >
-      <div class="logo">{{ isNarrow ? '◆' : '◆ 管理系统' }}</div>
+      <div class="logo">{{ isNarrow ? '◆' : '◆ 应收账款' }}</div>
       <el-menu
         router
         :default-active="$route.path"
@@ -45,16 +45,22 @@
               <span>未回款/未开票管理看板</span>
             </template>
             <el-menu-item index="/home">
-              <el-icon><DataAnalysis /></el-icon><span>数据概览</span>
+              <el-icon><DataAnalysis /></el-icon><span>数据总览</span>
             </el-menu-item>
             <el-menu-item index="/detail">
               <el-icon><Document /></el-icon><span>明细查询</span>
+            </el-menu-item>
+            <el-menu-item index="/trace">
+              <el-icon><Search /></el-icon><span>单号追溯</span>
             </el-menu-item>
             <el-menu-item index="/trend">
               <el-icon><TrendCharts /></el-icon><span>每日趋势</span>
             </el-menu-item>
             <el-menu-item index="/priority-actions">
               <el-icon><Flag /></el-icon><span>待处理优先级</span>
+            </el-menu-item>
+            <el-menu-item index="/invoice-daily">
+              <el-icon><Money /></el-icon><span>每日发货·回款</span>
             </el-menu-item>
           </el-sub-menu>
 
@@ -165,6 +171,7 @@ import {
   ArrowDown,
   Grid,
   Menu,
+  Search,
 } from '@element-plus/icons-vue'
 import { useBizStore } from '@/stores/biz'
 import { logout, clearAuthToken, getAuthToken, setAuthToken } from '@/api'

@@ -25,7 +25,9 @@
     "test:audit": "node server/test/audit.test.mjs",
     "test:browser": "node server/test/browser-check.test.mjs",
     "test:browser:roles": "node server/test/browser-roles.test.mjs",
-    "test": "npm run test:sync && npm run test:sync:reap && npm run test:scheduler"
+    "test": "npm run test:sync && npm run test:sync:reap && npm run test:scheduler",
+    "check:ep": "node scripts/check-ep-components.mjs",
+    "prebuild": "npm run check:ep"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",

@@ -150,6 +150,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { toPng } from 'html-to-image'
+import { captureWithFullWidth } from '@/utils/exportSize'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import PageHeader from '@/components/PageHeader.vue'
 import {
@@ -245,16 +246,20 @@ async function exportImage() {
   if (!exportEl.value) return
   exporting.value = true
   try {
-    const dataUrl = await toPng(exportEl.value, {
-      backgroundColor: '#eef2f7',
-      pixelRatio: 2,
-      cacheBust: true,
-      width: exportEl.value.offsetWidth,
-      height: exportEl.value.offsetHeight,
-      // 排除「导出看板图片」按钮本身
-      filter: (node) =>
-        !(node instanceof Element && node.classList && node.classList.contains('no-export')),
-    })
+    // 导出：先把元素临时撑宽到内容真正需要的宽度再截（见 utils/exportSize.js）。
+    // 本页是固定 760px 版式，所以不给 1200 下限，否则右边会多出一大条空白。
+    const dataUrl = await captureWithFullWidth(
+      exportEl.value,
+      toPng,
+      {
+        backgroundColor: '#eef2f7',
+        cacheBust: true,
+        // 排除「导出看板图片」按钮本身
+        filter: (node) =>
+          !(node instanceof Element && node.classList && node.classList.contains('no-export')),
+      },
+      { minWidth: 0, minHeight: 0 }
+    )
     const name = `客户平台未回款_${summary.value.snapshotDate || new Date().toISOString().slice(0, 10)}.png`
     const a = document.createElement('a')
     a.href = dataUrl

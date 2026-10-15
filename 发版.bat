@@ -57,4 +57,15 @@ echo     http://localhost:5173   (dev server)
 echo     http://localhost:3000   (built output)
 echo ==========================================
 echo.
+echo   >>> AFTER PUBLISHING, IN YOUR BROWSER PRESS:  Ctrl + F5  <<<
+echo.
+echo   Why: this build replaced every file name in dist/.
+echo   A tab that was already open is now on an OLD version
+echo   and will look stuck (address bar changes, content
+echo   does not). Ctrl + F5 fixes it.
+echo.
+echo   Note: you do NOT need this script just to see the
+echo   latest data - a normal refresh (F5) is enough.
+echo ==========================================
+echo.
 pause

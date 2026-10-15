@@ -25,6 +25,14 @@ import {
   importCustomerPlatformUnpaid,
   CUSTOMER_PLATFORM_BIZ_TYPE,
 } from './services/importer.js'
+// 每天备份一次数据库：历史快照不可再生（源表只有「当前状态」），丢了无法重建
+import { runBackup } from './services/dbBackup.js'
+import {
+  CUSTOMER_INVOICE_BIZ_TYPE,
+  CUSTOMER_INVOICE_OUT_NAME,
+  importCustomerInvoice,
+  importCustomerRecon,
+} from './services/customerInvoice.js'
 import {
   acquireSyncLock,
   releaseSyncLock,
@@ -64,6 +72,9 @@ const TABLE_SPECS = [
   { bizType: 'billed_unpaid',           outName: '(已开票未回款-每天)未回款.xlsx' },
   { bizType: 'shipped_uninvoiced',      outName: '(已发货未开票-每天)未开票.xlsx' },
   { bizType: 'customer_platform_unpaid', outName: '(客户未回款平台)未回款.xlsx' },
+  { bizType: CUSTOMER_INVOICE_BIZ_TYPE, outName: CUSTOMER_INVOICE_OUT_NAME },
+  // ⚠️ 2026-10-12 补：客户对账明细表（123）—— 先前漏了，导致「每日发货·回款」的左侧数据不更新
+  { bizType: 'customer_recon', outName: '(客户对账明细表)对账.xlsx' },
 ]
 
 // ------------------------------------------------------------
@@ -149,7 +160,18 @@ async function importFile(tableSpec) {
   try {
     const snapshotDate = todayDate()
     let result
-    if (tableSpec.bizType === CUSTOMER_PLATFORM_BIZ_TYPE) {
+    if (tableSpec.bizType === 'customer_recon') {
+      // 全量替换（当前状态表）
+      result = await importCustomerRecon(pool, { xlsxPath: filePath })
+      log('  ✓ ' + tableSpec.outName + ': ' + result.inserted + ' 条（已发货未开票 ' +
+          result.uninvoicedTotal.toLocaleString('en-US') + '）')
+    } else if (tableSpec.bizType === CUSTOMER_INVOICE_BIZ_TYPE) {
+      // 全量替换（当前状态表，不做历史快照）
+      result = await importCustomerInvoice(pool, { xlsxPath: filePath })
+      log('  ✓ ' + tableSpec.outName + ': ' + result.inserted + ' 条（开票 ' +
+          result.invoiceTotal.toLocaleString('en-US') + ' / 回款 ' +
+          result.payTotal.toLocaleString('en-US') + '）')
+    } else if (tableSpec.bizType === CUSTOMER_PLATFORM_BIZ_TYPE) {
       result = await importCustomerPlatformUnpaid(pool, { xlsxPath: filePath, snapshotDate })
       log('  ✓ ' + tableSpec.outName + ': ' + result.inserted + ' 条，金额 ' +
           result.totalAmount.toLocaleString('en-US') + '（跳过 ' + result.skippedCount + ' 行）')
@@ -182,7 +204,7 @@ async function importFile(tableSpec) {
  *   'skipped' —— 被同步锁挡住（网页端手动同步正在跑），**不该重试**，
  *                否则会和正在跑的那次打架
  */
-async function tick() {
+async function runSyncTick() {
   // 与网页端「立即同步」共用同一把锁（数据库层面原子互斥），避免两边同时写库
   const lock = await acquireSyncLock({ trigger: 'scheduler' })
   if (!lock.ok) {
@@ -223,6 +245,36 @@ async function tick() {
     runLines = []
   }
   return okAll ? 'ok' : 'failed'
+}
+
+/**
+ * 一轮调度 = 同步 + 每日备份。
+ *
+ * 备份**独立于同步**：无论同步返回 ok / failed / skipped（含上面的提前 return），
+ * 都保证备份被执行 —— 所以放在外层的 finally 里，而不是 runSyncTick 内部。
+ * 备份失败只记日志，绝不影响同步结果。
+ */
+async function tick() {
+  try {
+    return await runSyncTick()
+  } finally {
+    await dailyBackup()
+  }
+}
+
+/** 每天备份一次数据库；同一天只做一次 */
+async function dailyBackup() {
+  try {
+    const b = await runBackup()
+    if (b.error) {
+      errLog('数据库备份失败：' + b.error)
+    } else if (!b.skipped) {
+      log(`数据库已备份：${b.file.split(/[\\/]/).pop()}（${(b.bytes / 1024 / 1024).toFixed(2)} MB）`)
+      if (b.pruned?.length) log(`已清理旧备份：${b.pruned.join(', ')}`)
+    }
+  } catch (e) {
+    errLog('数据库备份异常：' + e.message)
+  }
 }
 
 // ------------------------------------------------------------

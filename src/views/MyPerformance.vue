@@ -84,14 +84,14 @@
     <el-row :gutter="16" class="cards" v-if="currentBiz !== 'customer_platform' && mySummary.hasData">
       <el-col :xs="12" :sm="12" :md="6">
         <div class="card">
-          <div class="card-label">未回款总额（元）</div>
+          <div class="card-label">{{ bizLabel }}总额（元）</div>
           <div class="card-value amount">{{ fmt(mySummary.total) }}</div>
           <div class="card-sub">{{ mySummary.snapshotDate || '暂无数据' }}</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="12" :md="6">
         <div class="card">
-          <div class="card-label">3个月以上（元）</div>
+          <div class="card-label">3个月以上{{ agingVerb }}（元）</div>
           <div class="card-value amount warning">{{ fmt(mySummary.over3m) }}</div>
           <div class="card-sub">占比 {{ (mySummary.over3mRatio * 100).toFixed(1) }}%</div>
         </div>
@@ -103,11 +103,21 @@
           <div class="card-sub">{{ mySummary.customerCount }} 个客户</div>
         </div>
       </el-col>
+      <!-- 第 4 张卡：排名 + 较上一期（2026-10-10 使用者定，替换原「单均金额」）
+           上行名次、下行对比。对比基准是「上一个可用批次」而不是「昨天」——
+           同步不是每天都有（国庆断档、客户平台周更），写死「昨日」会得出假 0。 -->
       <el-col :xs="12" :sm="12" :md="6">
         <div class="card">
-          <div class="card-label">单均金额（元）</div>
-          <div class="card-value amount">{{ fmt(avgBilledAmount) }}</div>
-          <div class="card-sub">总额 ÷ {{ mySummary.invoiceCount }} 张单据</div>
+          <div class="card-label">排名</div>
+          <div class="card-value" v-if="myRank">第 {{ myRank.position }} / {{ myRank.of }} 名</div>
+          <div class="card-value is-flat" v-else>—</div>
+          <div class="card-sub">
+            <span v-if="myDeltaText" :class="myDeltaClass">
+              较 {{ myPrevDateShort }}<template v-if="myDeltaDays !== null">（{{ myDeltaDays }}天前）</template> {{ myDeltaText }}
+            </span>
+            <span v-if="myDeltaText && myRank"> · </span>
+            <span v-if="myRank">占 {{ (myRank.share * 100).toFixed(1) }}%</span>
+          </div>
         </div>
       </el-col>
     </el-row>
@@ -174,25 +184,49 @@
       <template #header>
         <div class="card-head">
           <b>我的明细</b>
-          <span class="head-sub">共 {{ detailTotal }} 条</span>
+          <div class="head-right">
+            <el-select
+              v-model="selectedCustomer"
+              class="cust-filter"
+              placeholder="按客户筛选"
+              size="default"
+              filterable
+              clearable
+              @change="onCustomerChange"
+            >
+              <template #prefix>
+                <el-icon><Filter /></el-icon>
+              </template>
+              <el-option v-for="c in customerList" :key="c" :label="c" :value="c" />
+            </el-select>
+            <span class="head-sub">
+              共 {{ detailTotal }} 条 · 合计 <b class="amount">{{ fmt(detailSum) }}</b> 元<template
+                v-if="detailOver3m"
+              >（其中 3个月以上 <b class="amount warning">{{ fmt(detailOver3m) }}</b>）</template>
+            </span>
+          </div>
         </div>
       </template>
       <el-table :data="detailRows" border size="small" :header-cell-style="{ background: '#2c3e50', color: '#fff' }">
-        <el-table-column prop="docDate" label="日期" width="110" align="center" />
-        <el-table-column prop="docNo" label="单据编号" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="customer" label="客户名称" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="agingCategory" label="账龄" width="160" align="center">
+        <!-- 列宽按内容实测值重排（2026-10-10）：
+             原来「单据编号」富余 44px、「备注」富余一大截，而「客户名称」只有 180px、
+             实际最长要 239px（如「招行宁波分行-信用卡部周黎俊」）⇒ 客户名被截断。
+             把富余的宽度让给客户名称，让它能完整显示。 -->
+        <el-table-column prop="docDate" label="日期" width="114" align="center" />
+        <el-table-column prop="docNo" label="单据编号" min-width="115" show-overflow-tooltip />
+        <el-table-column prop="customer" label="客户名称" min-width="240" show-overflow-tooltip />
+        <el-table-column prop="agingCategory" label="账龄" width="154" align="center">
           <template #default="{ row }">
             <el-tag :type="agingTagType(row.agingCategory)" effect="plain" size="small">{{ row.agingCategory || '未分类' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="amountTotal" label="金额(元)" min-width="130" align="right">
+        <el-table-column prop="amountTotal" :label="`${bizLabel}金额（元）`" min-width="150" align="right">
           <template #default="{ row }"><span class="amount">{{ fmt(row.amountTotal) }}</span></template>
         </el-table-column>
-        <el-table-column prop="over3m" label="3月以上" min-width="120" align="right">
+        <el-table-column prop="over3m" :label="`3个月以上${agingVerb}`" min-width="140" align="right">
           <template #default="{ row }"><span class="amount warning" v-if="row.over3m">{{ fmt(row.over3m) }}</span><span v-else>—</span></template>
         </el-table-column>
-        <el-table-column prop="note" label="备注" min-width="150" show-overflow-tooltip />
+        <el-table-column prop="note" label="备注" min-width="110" show-overflow-tooltip />
       </el-table>
     </el-card>
 
@@ -201,18 +235,36 @@
       <template #header>
         <div class="card-head">
           <b>客户平台订单明细</b>
-          <span class="head-sub">共 {{ cpDetailRows.length }} 条</span>
+          <div class="head-right">
+            <el-select
+              v-model="selectedCustomer"
+              class="cust-filter"
+              placeholder="按客户筛选"
+              size="default"
+              filterable
+              clearable
+              @change="onCustomerChange"
+            >
+              <template #prefix>
+                <el-icon><Filter /></el-icon>
+              </template>
+              <el-option v-for="c in customerList" :key="c" :label="c" :value="c" />
+            </el-select>
+            <span class="head-sub">
+              共 {{ cpDetailRows.length }} 条 · 合计 <b class="amount">{{ fmt(cpDetailSum) }}</b> 元
+            </span>
+          </div>
         </div>
       </template>
       <el-table :data="cpDetailRows" border size="small" :header-cell-style="{ background: '#2c3e50', color: '#fff' }">
         <el-table-column prop="orderDate" label="下单日期" width="110" align="center" />
-        <el-table-column prop="orderNo" label="订单编号" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="platform" label="平台" width="100" align="center" />
-        <el-table-column prop="customer" label="客户" min-width="150" show-overflow-tooltip />
-        <el-table-column prop="amountTotal" label="金额(元)" min-width="130" align="right">
+        <el-table-column prop="orderNo" label="订单编号" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="platform" label="平台" width="120" align="center" show-overflow-tooltip />
+        <el-table-column prop="customer" label="客户" min-width="200" show-overflow-tooltip />
+        <el-table-column prop="amountTotal" label="金额(元)" min-width="125" align="right">
           <template #default="{ row }"><span class="amount">{{ fmt(row.amountTotal) }}</span></template>
         </el-table-column>
-        <el-table-column prop="qty" label="数量" width="90" align="right" />
+        <el-table-column prop="qty" label="数量" width="80" align="right" />
       </el-table>
     </el-card>
   </div>
@@ -221,12 +273,15 @@
 <script setup>
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Picture, Download } from '@element-plus/icons-vue'
+import { Picture, Download, Filter } from '@element-plus/icons-vue'
 import { toPng } from 'html-to-image'
+import { captureWithFullWidth } from '@/utils/exportSize'
 import request from '@/api/request'
 import { exportDetail, exportCustomerPlatformDetail } from '@/api'
 import { loadAuth, useAuth } from '@/composables/useAuth'
 import PageHeader from '@/components/PageHeader.vue'
+// 与其它看板页保持一致：30 秒静默刷新（这页以前漏了，只有它不自动更新）
+import { useAutoRefresh } from '@/composables/useAutoRefresh'
 
 // 导出权限：与「明细查询」页用同一套判断（管理员与成员都能导，
 // 将来若要收紧，改 useAuth 里的 CAN_EXPORT 即可，这里不用动）
@@ -240,6 +295,9 @@ const loading = ref(true)
 const currentBiz = ref('billed_unpaid')
 const selectedSalesperson = ref('')
 const salespersonList = ref([])
+// 客户筛选：只列「当前业务员 × 当前业务线」名下的客户，见 loadCustomerList
+const selectedCustomer = ref('')
+const customerList = ref([])
 
 // ========== 数据 ==========
 const mySummary = ref({ hasData: false })
@@ -247,7 +305,10 @@ const cpSummary = ref({ total: 0, snapshotDate: '' })
 const cpAging = ref([])
 const detailRows = ref([])
 const detailTotal = ref(0)
+const detailSum = ref(0)
+const detailOver3m = ref(0)
 const cpDetailRows = ref([])
+const cpDetailSum = ref(0)
 
 // ========== 工具函数 ==========
 function fmt(val) {
@@ -260,12 +321,42 @@ function fmtWan(val) {
   return (Number(val || 0) / 10000).toFixed(2)
 }
 
-/** 单均金额：总额 ÷ 单据数。以前这里放的是「占全公司」，
- *  但只选了 1 个业务员时「自己 ÷ 自己」恒等于 100%，没有任何信息量。 */
-const avgBilledAmount = computed(() => {
-  const total = Number(mySummary.value.total) || 0
-  const n = Number(mySummary.value.invoiceCount) || 0
-  return n > 0 ? total / n : 0
+/** 排名：后端按「未回款总额」倒序算（并列同名次），未选业务员时为 null */
+const myRank = computed(() => mySummary.value.rank || null)
+
+/** 上期基准 = **上一个可用批次**，不是「昨天」；取不到就整行不渲染 */
+const myPrev = computed(() => mySummary.value.prev || null)
+const myPrevDateShort = computed(() => String(myPrev.value?.snapshotDate || '').slice(5))
+
+/** 与上期的间隔天数。必须显示：否则「较 10-09」会被读成「昨天降了」 */
+const myDeltaDays = computed(() => {
+  const p = myPrev.value
+  const cur = mySummary.value.snapshotDate
+  if (!p?.snapshotDate || !cur) return null
+  const d = Math.round(
+    (new Date(`${cur}T00:00:00`) - new Date(`${p.snapshotDate}T00:00:00`)) / 86400000
+  )
+  return Number.isFinite(d) ? d : null
+})
+
+const myDeltaAmount = computed(() => {
+  const p = myPrev.value
+  if (!p) return null
+  return Number(mySummary.value.total || 0) - Number(p.total || 0)
+})
+
+/** 涨红跌绿（全站金额语义色）；持平走中性灰 —— 不显示「↑0.00万」这种没信息量的读数 */
+const myDeltaClass = computed(() => {
+  const d = myDeltaAmount.value
+  if (d === null || Math.abs(d) < 0.005) return 'delta-flat'
+  return d > 0 ? 'delta-up' : 'delta-down'
+})
+
+const myDeltaText = computed(() => {
+  const d = myDeltaAmount.value
+  if (d === null) return ''
+  if (Math.abs(d) < 0.005) return '持平'
+  return `${d > 0 ? '↑' : '↓'} ${fmtWan(Math.abs(d))}万`
 })
 
 /** 当前业务类型 + 选中的人，到底有没有数据（决定显示卡片还是空状态） */
@@ -281,6 +372,15 @@ const BIZ_LABELS = {
   customer_platform: '客户平台未回款',
 }
 const bizLabel = computed(() => BIZ_LABELS[currentBiz.value] || '')
+
+/**
+ * 账龄档的结尾用「未回款 / 未开票」—— 跟着当前业务线走。
+ *
+ * 2026-10-13 使用者要求：这两列（和上面两张卡）原来写死「金额(元)」「3月以上」「未回款总额」，
+ * 切到「已发货未开票」时就成了错的标签 —— 明明是未开票线，却写着「未回款」。
+ * 所以标签必须跟着业务线变：两条销售线各自的「金额」与「3个月以上」口径都不一样。
+ */
+const agingVerb = computed(() => (currentBiz.value === 'shipped_uninvoiced' ? '未开票' : '未回款'))
 
 /** 较上期：涨了用红（与全站金额语义色一致），跌了用绿 */
 const cpDeltaAmount = computed(() => Number(cpSummary.value.deltaAmount ?? 0))
@@ -370,6 +470,32 @@ async function loadSalespersonList() {
   salespersonList.value = [...new Set(names)].sort().map(name => ({ name, department: '' }))
 }
 
+/**
+ * 客户候选名单 = **这个业务员在这条业务线上的客户**。
+ *
+ * 为什么不是全公司的客户：业务员只找自己的客户，下拉里塞几百个别人的名字没法用。
+ * 两条线的取数方式不同（客户平台是另一张表、另一套客户字段），所以分两条路走；
+ * 客户口径与明细页保持同一套，否则选出来的名字在明细里一行都匹配不到。
+ */
+async function loadCustomerList() {
+  const sp = selectedSalesperson.value || ''
+  if (!sp) {
+    customerList.value = []
+    return
+  }
+  try {
+    if (currentBiz.value === 'customer_platform') {
+      const res = await request.get('/customer-platform-unpaid/customers', { params: { salesperson: sp } })
+      customerList.value = res.customers || []
+    } else {
+      const res = await request.get('/filters', { params: { bizType: currentBiz.value, salesperson: sp } })
+      customerList.value = (res.customers || []).filter(Boolean)
+    }
+  } catch {
+    customerList.value = []
+  }
+}
+
 async function loadSummary() {
   const sp = selectedSalesperson.value || ''
   try {
@@ -386,15 +512,32 @@ async function loadDetail() {
   if (!sp) {
     detailRows.value = []
     detailTotal.value = 0
+    detailSum.value = 0
+    detailOver3m.value = 0
     return
   }
   try {
-    const res = await request.get('/detail', { params: { bizType: currentBiz.value, salesperson: sp, page: 1, pageSize: 50 } })
+    const res = await request.get('/detail', {
+      params: {
+        bizType: currentBiz.value,
+        salesperson: sp,
+        // 空串后端会当没传处理，不必特意删 key
+        customer: selectedCustomer.value || '',
+        page: 1,
+        pageSize: 50,
+      },
+    })
     detailRows.value = res.records || []
     detailTotal.value = res.total || detailRows.value.length
+    // 合计用后端对「筛选全量」的聚合，不是本页 50 行之和 ——
+    // 否则筛到大客户时，翻页会让合计跟着变，看着像数字错了
+    detailSum.value = Number(res.sumTotal || 0)
+    detailOver3m.value = Number(res.sumColumns?.over3m || 0)
   } catch {
     detailRows.value = []
     detailTotal.value = 0
+    detailSum.value = 0
+    detailOver3m.value = 0
   }
 }
 
@@ -428,17 +571,27 @@ async function loadCpDetail() {
   const sp = selectedSalesperson.value || ''
   if (!sp) {
     cpDetailRows.value = []
+    cpDetailSum.value = 0
     return
   }
   try {
-    const res = await request.get('/customer-platform-unpaid/detail', { params: { salesperson: sp, page: 1, pageSize: 50 } })
+    const res = await request.get('/customer-platform-unpaid/detail', {
+      params: {
+        salesperson: sp,
+        customer: selectedCustomer.value || '',
+        page: 1,
+        pageSize: 50,
+      },
+    })
     cpDetailRows.value = res.records || []
+    cpDetailSum.value = Number(res.sumTotal || 0)
   } catch {
     cpDetailRows.value = []
+    cpDetailSum.value = 0
   }
 }
 
-async function loadData() {
+async function loadData(silent) {
   // 没选人就不用请求任何业务数据；直接放行，让空状态露出来。
   // （以前 loading 会一直挂着，遮罩盖住整页，空状态根本看不到）
   if (!selectedSalesperson.value) {
@@ -447,12 +600,15 @@ async function loadData() {
     cpAging.value = []
     detailRows.value = []
     cpDetailRows.value = []
+    customerList.value = []
     loading.value = false
     return
   }
-  loading.value = true
+  // 静默刷新（silent=true）不闪遮罩：后台每 30 秒重拉一次，不能每次都盖一层
+  if (!silent) loading.value = true
   try {
-    await Promise.all([loadSummary(), loadCpSummary(), loadCpAging()])
+    // 客户名单跟其它数据一起拉：它决定下拉里能选谁，分开拉会出现「先能选、随后又变空」
+    await Promise.all([loadSummary(), loadCpSummary(), loadCpAging(), loadCustomerList()])
     if (currentBiz.value === 'customer_platform') {
       await loadCpDetail()
     } else {
@@ -460,16 +616,26 @@ async function loadData() {
     }
   } finally {
     // 用 finally：任何一个请求抛错都不能把遮罩永久留在页面上
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
 function onSalespersonChange() {
+  // 换了人，上一位的客户选择对他没有意义
+  selectedCustomer.value = ''
   loadData()
 }
 
 function onBizChange() {
+  // 换了业务线，客户名单整套都变了
+  selectedCustomer.value = ''
   loadData()
+}
+
+/** 客户筛选只影响明细表：上方 4 张卡是「我的」合计，不是某个客户的 */
+function onCustomerChange() {
+  if (currentBiz.value === 'customer_platform') loadCpDetail()
+  else loadDetail()
 }
 
 // ========== 导出 ==========
@@ -483,7 +649,7 @@ function buildNameParts() {
   return { sp, label, date }
 }
 
-/** 导出整页图片：发给领导/客户，跟「数据概览」的导出看板图片是一个用法 */
+/** 导出整页图片：发给领导/客户，跟「数据总览」的导出看板图片是一个用法 */
 async function onExportImage() {
   if (exportingImg.value) return
   if (!canExport.value) {
@@ -496,18 +662,21 @@ async function onExportImage() {
     // 等一下渲染：禁用态与 loading 文案刚变更，立刻截会截到旧的按钮文字
     await nextTick()
     const { sp, label, date } = buildNameParts()
-    const dataUrl = await toPng(pageRef.value, {
-      backgroundColor: '#f5f7fa',
-      pixelRatio: 2,
-      cacheBust: true,
-      // 导出前把滚动位置复位，避免截到半截表格
-      width: pageRef.value.scrollWidth,
-      height: pageRef.value.scrollHeight,
-      // 导出时排除按钮外壳本身：上报图片里不该出现按钮
-      // （沿用「数据概览」页 exportImage 的 no-export 约定，别另发明一套）
-      filter: (node) =>
-        !(node instanceof Element && node.classList && node.classList.contains('no-export')),
-    })
+    // 导出：先把元素临时撑宽（明细表横向滚动在内层容器上，光给画布宽度不够，
+    // 右边几列会被丢掉）。详见 utils/exportSize.js
+    const dataUrl = await captureWithFullWidth(
+      pageRef.value,
+      toPng,
+      {
+        backgroundColor: '#f5f7fa',
+        cacheBust: true,
+        // 导出时排除按钮外壳本身：上报图片里不该出现按钮
+        // （沿用「数据总览」页 exportImage 的 no-export 约定，别另发明一套）
+        filter: (node) =>
+          !(node instanceof Element && node.classList && node.classList.contains('no-export')),
+      },
+      { minWidth: 1200, minHeight: 800 }
+    )
     const a = document.createElement('a')
     a.href = dataUrl
     a.download = `我的业绩_${sp}_${label}_${date || '无日期'}.png`
@@ -564,6 +733,10 @@ onMounted(async () => {
   await loadAuth()
   await loadSalespersonList()
 })
+
+// 30 秒静默刷新：数据同步进来后不用手动刷新页面。
+// 未选业务员时 loadData 会直接返回，不会白发请求。
+useAutoRefresh(loadData)
 </script>
 
 <style scoped>
@@ -576,7 +749,7 @@ onMounted(async () => {
 .current-tag { margin-left: 8px; }
 
 .cards { margin: 16px 0; }
-/* ====== 核心指标卡片（圆角与灰阶对齐「数据概览」）====== */
+/* ====== 核心指标卡片（圆角与灰阶对齐「数据总览」）====== */
 .card {
   background: white;
   border: 1px solid #ebeef5;
@@ -586,13 +759,17 @@ onMounted(async () => {
 }
 .card-label { font-size: 14px; color: #909399; margin-bottom: 12px; }
 .card-value { font-size: 26px; font-weight: 700; color: #303133; line-height: 1.2; }
-/* 金额用全站统一的语义色（与数据概览/明细一致） */
+/* 金额用全站统一的语义色（与数据总览/明细一致） */
 .card-value.amount { color: #f56c6c; }
 .card-value.amount.warning { color: #e6a23c; }
 .card-sub { font-size: 12px; color: #c0c4cc; margin-top: 6px; }
 /* 较上期：涨红跌绿（全站金额语义色），持平走中性灰 */
 .card-value.is-down { color: #67c23a; }
 .card-value.is-flat { color: #909399; }
+/* 第 4 张卡副标题里的涨跌：同一个语义色，但小一档 */
+.card-sub .delta-up { color: #f56c6c; font-weight: 600; }
+.card-sub .delta-down { color: #67c23a; font-weight: 600; }
+.card-sub .delta-flat { color: #909399; font-weight: 600; }
 
 /* ====== 账龄分布（老 → 新）====== */
 .aging-block { margin-top: 16px; }
@@ -621,11 +798,33 @@ onMounted(async () => {
 .aging-sub { font-size: 12px; color: #909399; text-align: right; white-space: nowrap; }
 
 .block { margin-top: 16px; }
-.card-head { display: flex; justify-content: space-between; align-items: center; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+/* 卡片标题右侧：客户筛选 + 条数/合计。单独包一层，免得 space-between 把它们拉到两边 */
+.head-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* 客户筛选做成「按钮」观感 —— 卡片标题里放个淡输入框太容易被忽略，
+   填充底色 + 描边 + 加粗，一眼看出这是个能点的筛选项。空着时显示「按客户筛选」。 */
+.cust-filter { width: 230px; flex: 0 0 auto; }
+.cust-filter :deep(.el-select__wrapper) {
+  background-color: #ecf5ff;
+  box-shadow: 0 0 0 1px #a0cfff inset;
+  font-weight: 600;
+}
+.cust-filter :deep(.el-select__wrapper:hover) {
+  background-color: #d9ecff;
+  box-shadow: 0 0 0 1px #409eff inset;
+}
+.cust-filter :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #409eff inset;
+}
+.cust-filter :deep(.el-select__prefix) { color: #409eff; }
+.cust-filter :deep(.el-select__placeholder) { color: #409eff; }
 .head-sub { font-size: 13px; color: #909399; }
 
 .amount { color: #f56c6c; font-weight: 600; }
 .amount.warning { color: #e6a23c; }
+
+/* 明细表：单元格一律不换行 —— 宽度不够就让表格横向滚动，而不是折行把行高搞乱 */
+:deep(.el-table .cell) { white-space: nowrap; }
 
 /* 业务类型切换与表格的收尾规范 */
 .biz-switch { margin: 16px 0; }
@@ -660,6 +859,7 @@ onMounted(async () => {
 
   .block { margin-top: 12px; }
   .card-head { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .head-right { flex-wrap: wrap; gap: 6px; }
   .head-sub { font-size: 12px; }
 
   .biz-switch { margin: 12px 0; }

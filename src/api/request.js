@@ -4,7 +4,10 @@ import { ElMessage } from 'element-plus'
 const request = axios.create({
   // 开发环境走 vite 代理，生产环境走同源
   baseURL: import.meta.env.VITE_API_BASE || '/api',
-  timeout: 15000,
+  // 2026-10-10：15s → 30s。
+  // 公网要绕 Cloudflare 的 AMS（阿姆斯特丹）节点，国内一个请求 0.5~1.1s、
+  // 抖动时 P95 到 5s，一页 4~7 个请求很容易顶到 15s 上限 → 表现成「偶发加载不出来」。
+  timeout: 30000,
 })
 
 // ------------------------------------------------------------
@@ -40,6 +43,26 @@ const SILENT_CODES = new Set(['BAD_CREDENTIALS', 'TOO_MANY_ATTEMPTS'])
 request.interceptors.response.use(
   (response) => response.data,
   async (error) => {
+    // ------------------------------------------------------------
+    // 隧道抖动自动重试（2026-10-10 新增）
+    //
+    // 公网链路要绕到欧洲节点，偶发一个请求卡 5s+ 甚至断连；页面一次发 4~7 个请求，
+    // 撞上就是「加载不出来」。这类失败是**瞬时**的，重试一两次基本就过了。
+    //
+    // ⚠️ 只重试 GET：POST 可能是登录 / 触发同步，重试会造成副作用。
+    // ⚠️ 只重试「超时」和「压根没收到响应」两种；收到 4xx/5xx 说明服务端已明确表态，不重试。
+    // ------------------------------------------------------------
+    const cfg = error.config
+    const transient =
+      error.code === 'ECONNABORTED' || (!error.response && !error.code?.startsWith('ERR_CANCELED'))
+    const isGet = cfg && String(cfg.method || '').toLowerCase() === 'get'
+    const tried = cfg?.__retryCount ?? 0
+    if (isGet && transient && tried < 2) {
+      cfg.__retryCount = tried + 1
+      await new Promise((r) => setTimeout(r, 400 * cfg.__retryCount)) // 400ms → 800ms 退避
+      return request(cfg)
+    }
+
     const status = error.response?.status
 
     // 导出接口用的是 responseType:'blob'，出错时响应体也是 Blob，

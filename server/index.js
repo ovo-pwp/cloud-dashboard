@@ -14,6 +14,7 @@ const distDir = path.resolve(__dirname, '../dist')
 
 import { pool } from './db/pool.js'
 import receivableRoutes from './routes/receivable.js'
+import customerInvoiceRoutes from './routes/customerInvoice.js'
 import { startWatcher } from './watcher.js'
 import { startScheduler } from './scheduler.js'
 import { requireLogin, isLoginEnabled, listAccounts, ROLE_ADMIN, ROLE_LABEL } from './services/syncAuth.js'
@@ -35,10 +36,34 @@ app.use(express.json())
 const isApiPath = (pathname) => pathname.startsWith('/api')
 try {
   // 静态文件服务
-  app.use(express.static(distDir, { index: 'index.html' }))
+  //
+  // 🔴 缓存策略（2026-10-10 加）：公网每次往返要 230ms（绕 Cloudflare 欧洲节点），
+  //   以前用 express.static 默认的 max-age=0 ⇒ 每次打开站点都要对 21 个文件逐个
+  //   发 304 校验，白烧 2.8 秒。而 dist 里的文件名都带内容 hash
+  //   （index-<hash>.js / <页面>-<hash>.js），内容一变名字就变 —— 可以放心长缓存。
+  //
+  //   · 带 hash 的 js/css：immutable 长缓存，浏览器与 Cloudflare 都能长期复用
+  //   · index.html：必须每次校验，否则发版后拿到的是旧文件名（会 404）
+  //   · 其余（favicon 等）：短缓存
+  app.use(
+    express.static(distDir, {
+      index: 'index.html',
+      setHeaders(res, filePath) {
+        const p = filePath.replace(/\\/g, '/')
+        if (/-[A-Za-z0-9_-]{8,}\.(js|css)$/.test(p)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+        } else if (p.endsWith('/index.html')) {
+          res.setHeader('Cache-Control', 'no-cache')
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=3600')
+        }
+      },
+    })
+  )
   // SPA fallback：非 /api 请求返回 index.html
   app.use((req, res, next) => {
     if (!isApiPath(req.path)) {
+      res.setHeader('Cache-Control', 'no-cache')
       return res.sendFile(path.resolve(distDir, 'index.html'))
     }
     next()
@@ -61,6 +86,8 @@ app.use('/api', (req, res, next) => {
 })
 
 app.use('/api', receivableRoutes)
+// 「每天开的票 / 回的款」（2026-10-12 新增）
+app.use('/api', customerInvoiceRoutes)
 
 // 404（API 路径 unmatched 才走这里）
 app.use('/api', (req, res) => {
