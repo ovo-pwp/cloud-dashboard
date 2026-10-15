@@ -42,3 +42,8 @@ backups/
 
 # 临时文件 —— 曾出现 tmp_tk.txt 里放着登录令牌（2026-10-08 遗留），绝不能进版本库
 tmp_*
+
+# Cloudflare Tunnel 二进制（Windows，53MB；从 Cloudflare 官方下载，勿入库 —— 2026-10-15 从历史中清除）
+cloudflared.exe
+cloudflared
+deploy/tunnel/cloudflared.exe
