@@ -1478,6 +1478,17 @@ router.get('/customer-platform-unpaid/summary', async (req, res, next) => {
 //   边界规则是从使用者给的参考图反推出来的，4 档金额与单数全部精确吻合：
 //     基准 = 快照所在月的最后一天；age = 基准 - order_date
 //     age >= 90 → 3个月以上 / >= 60 → 2个月 / >= 30 → 1个月 / 其余 → 当月
+//
+// 🔴 这段 CASE 2026-10-19 抽成函数：新增的「明细里的账龄列」必须与账龄分布用同一套边界，
+//    两处各写一遍的话，以后改边界必然只改一处，明细和汇总就会对不上。
+function cpuAgingCaseSql(ageExpr) {
+  return `CASE
+            WHEN ${ageExpr} >= 90 THEN '3个月以上'
+            WHEN ${ageExpr} >= 60 THEN '2个月'
+            WHEN ${ageExpr} >= 30 THEN '1个月'
+            ELSE '当月'
+          END`
+}
 router.get('/customer-platform-unpaid/aging', async (req, res, next) => {
   try {
     const snapshot = await getCpuLatestSnapshot()
@@ -1499,12 +1510,7 @@ router.get('/customer-platform-unpaid/aging', async (req, res, next) => {
            FROM customer_platform_unpaid
           WHERE snapshot_date = $1${spFilter}
        )
-       SELECT CASE
-                WHEN age >= 90 THEN '3个月以上'
-                WHEN age >= 60 THEN '2个月'
-                WHEN age >= 30 THEN '1个月'
-                ELSE '当月'
-              END AS segment,
+       SELECT ${cpuAgingCaseSql('age')} AS segment,
               ROUND(SUM(amt)::numeric, 2)::float8 AS total,
               COUNT(*)::int AS order_count,
               MIN(age) AS min_age
@@ -1757,6 +1763,7 @@ const CPU_EXPORT_COLUMNS = [
   { key: 'orderNo', label: '订单号' },
   { key: 'customer', label: '客户' },
   { key: 'accountCustomer', label: '平台账号客户' },
+  { key: 'agingCategory', label: '账龄' },
   { key: 'city', label: '地区' },
   { key: 'product', label: '商品' },
   { key: 'qty', label: '数量' },
@@ -1774,6 +1781,9 @@ const CPU_EXPORT_SELECT = `
   c.customer_order_no                                     AS "orderNo",
   COALESCE(NULLIF(c.customer_name,''), c.account_customer, '—')  AS "customer",
   c.account_customer                                      AS "accountCustomer",
+  ${cpuAgingCaseSql(
+    `((date_trunc('month', c.snapshot_date::date) + INTERVAL '1 month - 1 day')::date - c.order_date)`
+  )}                                                      AS "agingCategory",
   c.city,
   c.product_name                                          AS "product",
   c.qty::float8                                           AS "qty",
@@ -1822,6 +1832,11 @@ router.get('/customer-platform-unpaid/detail', async (req, res, next) => {
          c.report_plan_no AS "planNo",
          c.invoice_status AS "invoiceStatus",
          c.city,
+         -- 账龄（2026-10-19）：原来只有上方「我的账龄分布」卡才有账龄，明细里看不到某一单多久了。
+         -- 使用者要求「把账龄放到下面的明细里」，于是每行现算一档，边界与 aging 接口共用同一个函数。
+         ${cpuAgingCaseSql(
+           `((date_trunc('month', c.snapshot_date::date) + INTERVAL '1 month - 1 day')::date - c.order_date)`
+         )} AS "agingCategory",
          n.note AS "note"
        FROM customer_platform_unpaid c
        LEFT JOIN detail_note n

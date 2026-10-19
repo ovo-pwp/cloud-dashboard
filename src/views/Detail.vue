@@ -189,7 +189,9 @@
           </span>
         </template>
       </el-table-column>
-      <el-table-column prop="note" label="进度反馈" min-width="150" show-overflow-tooltip>
+      <!-- 宽度 2026-10-19 从 150 拉到 240：进度反馈内容是成句的话，
+           150px 只露三四个字，等于看不见（与「我的业绩」页同步调整） -->
+      <el-table-column prop="note" label="进度反馈" min-width="240" show-overflow-tooltip>
         <template #default="{ row }">
           <!-- 管理员与成员都能点进入编辑 -->
           <el-input

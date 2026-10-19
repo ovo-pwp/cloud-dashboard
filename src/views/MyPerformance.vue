@@ -161,23 +161,11 @@
       </el-col>
     </el-row>
 
-    <!-- ====== 账龄分布：老 → 新，与看板口径一致 ====== -->
-    <el-card class="block aging-block" shadow="never" v-if="currentBiz === 'customer_platform' && cpSummary.total > 0">
-      <template #header>
-        <div class="card-head">
-          <b>我的账龄分布</b>
-          <span class="head-sub">{{ cpSummary.snapshotDate }}</span>
-        </div>
-      </template>
-      <div class="aging-list">
-        <div v-for="seg in cpAgingRows" :key="seg.name" class="aging-item" :class="{ 'is-warn': seg.warn }">
-          <span class="aging-name">{{ seg.name }}</span>
-          <span class="aging-bar"><i :style="{ width: seg.pct + '%', background: seg.color }"></i></span>
-          <span class="aging-amount amount" :class="{ warning: seg.warn }">{{ fmt(seg.total) }}</span>
-          <span class="aging-sub">{{ seg.pct.toFixed(1) }}% · {{ seg.count }} 单</span>
-        </div>
-      </div>
-    </el-card>
+    <!-- ====== 账龄分布 ======
+         2026-10-19 按使用者要求去掉这张独立的账龄分布卡：
+         「这个可以不用单独，把账龄放到下面的明细里」——
+         业务员看的是「哪一单拖了多久」，汇总成 4 条横条反而不如明细里一行一行的账龄标签直接。
+         账龄改为客户平台订单明细里的「账龄」列（后端 /customer-platform-unpaid/detail 现算）。 -->
 
     <!-- ====== 明细表格 ====== -->
     <el-card class="block" shadow="never" v-if="detailRows.length > 0 && currentBiz !== 'customer_platform'">
@@ -231,12 +219,13 @@
         <el-table-column prop="amountTotal" :label="`${bizLabel}金额（元）`" min-width="150" align="right">
           <template #default="{ row }"><span class="amount">{{ fmt(row.amountTotal) }}</span></template>
         </el-table-column>
-        <el-table-column prop="over3m" :label="`3个月以上${agingVerb}`" min-width="140" align="right">
-          <template #default="{ row }"><span class="amount warning" v-if="row.over3m">{{ fmt(row.over3m) }}</span><span v-else>—</span></template>
-        </el-table-column>
+        <!-- 「3个月以上」这一列 2026-10-19 按使用者要求去掉：上方第 2 张卡已经给出
+             3个月以上的总额和占比，明细里再摆一列就是重复信息，还把进度反馈挤得只剩几个字。 -->
         <!-- 进度反馈（2026-10-19 起改名为「进度反馈」，原「备注」）：与「明细查询」页同一套交互
-             —— 点一下即可填写，Enter 保存 / Esc 取消。空着时显示「点击填写」，让人知道这里能写。 -->
-        <el-table-column prop="note" label="进度反馈" min-width="150">
+             —— 点一下即可填写，Enter 保存 / Esc 取消。空着时显示「点击填写」，让人知道这里能写。
+             宽度 2026-10-19 从 150 拉到 320：实际内容动辄「客户做了行内方案，在催客户…」，
+             150px 只能露三四个字，等于看不见。 -->
+        <el-table-column prop="note" label="进度反馈" min-width="320">
           <template #default="{ row }">
             <el-input
               v-if="canEditDetail && editingId === row.id"
@@ -295,6 +284,13 @@
         <el-table-column prop="orderNo" label="订单编号" min-width="200" show-overflow-tooltip />
         <el-table-column prop="platform" label="平台" width="120" align="center" show-overflow-tooltip />
         <el-table-column prop="customer" label="客户" min-width="200" show-overflow-tooltip />
+        <!-- 账龄（2026-10-19 从上方「我的账龄分布」卡搬下来）：口径与 /customer-platform-unpaid/aging
+             完全一致 —— 基准=快照当月末，age=基准-下单日期，>=90/>=60/>=30 分三档，其余当月。 -->
+        <el-table-column prop="agingCategory" label="账龄" width="130" align="center">
+          <template #default="{ row }">
+            <el-tag :type="agingTagType(row.agingCategory)" effect="plain" size="small">{{ row.agingCategory || '未分类' }}</el-tag>
+          </template>
+        </el-table-column>
         <!-- 地区：客户平台源表没有「地址」列，改为从客户名解析（详见 importer.js parsePlatformCustomerCity） -->
         <el-table-column prop="city" label="地区" width="100" align="center">
           <template #default="{ row }"><span :class="{ 'date-missing': !row.city }">{{ row.city || '—' }}</span></template>
@@ -368,7 +364,6 @@ const customerList = ref([])
 // ========== 数据 ==========
 const mySummary = ref({ hasData: false })
 const cpSummary = ref({ total: 0, snapshotDate: '' })
-const cpAging = ref([])
 const detailRows = ref([])
 const detailTotal = ref(0)
 const detailSum = ref(0)
@@ -474,51 +469,17 @@ const cpDeltaPctText = computed(() => {
   return `${arrow} ${Math.abs(pct).toFixed(1)}%`
 })
 
-// 账龄固定「老 → 新」，颜色 红→橙→黄→蓝→绿；接口返回顺序不稳定，必须自己排。
-// 这是「我的业绩」页最有用的信息：钱压了多久，比总额更能说明问题。
-const AGING_ORDER = [
-  { name: '3个月以上', color: '#f56c6c' },
-  { name: '2个月', color: '#e6a23c' },
-  { name: '1个月', color: '#f4d03f' },
-  { name: '当月', color: '#409eff' },
-]
-const cpAgingRows = computed(() => {
-  const total = Number(cpSummary.value.total) || 0
-  const map = new Map((cpAging.value || []).map((s) => [s.segment, s]))
-  const segs = AGING_ORDER.map((o) => {
-    const hit = map.get(o.name)
-    const amt = Number(hit?.total || 0)
-    return {
-      name: o.name,
-      color: o.color,
-      total: amt,
-      count: Number(hit?.orderCount || 0),
-      pct: total > 0 ? (amt / total) * 100 : 0,
-      warn: o.name === '3个月以上',
-    }
-  })
-  // 兜底：接口万一给出没在上面的档位，也不要悄悄丢掉
-  for (const [name, v] of map) {
-    if (!AGING_ORDER.some((o) => o.name === name)) {
-      const amt = Number(v.total || 0)
-      segs.push({
-        name, color: '#909399', total: amt, count: Number(v.orderCount || 0),
-        pct: total > 0 ? (amt / total) * 100 : 0, warn: false,
-      })
-    }
-  }
-  return segs.filter((s) => s.total > 0)
-})
-
 // 账龄标签配色：接口返回的是「三个月以上未回款 / 一个月未回款 / 当月未回款」这类全名，
 // 不能按「3个月以上」这种简写做映射（原来的键一个都对不上，标签全掉成灰色）。
 // 判定逻辑与「明细查询」页保持一致。
+// 2026-10-19：客户平台线的账龄是后端现算的，返回「3个月以上 / 2个月 / 1个月 / 当月」（阿拉伯数字），
+// 与应收两条线的中文写法不同，所以两种写法都要认，否则客户平台的标签会全掉成绿色。
 function agingTagType(category) {
   const c = String(category || '')
-  if (c.includes('三个月以上')) return 'danger'
-  if (c.includes('三个月')) return 'warning'
-  if (c.includes('两个月')) return 'warning'
-  if (c.includes('一个月')) return 'primary'
+  if (c.includes('三个月以上') || c.includes('3个月以上')) return 'danger'
+  if (c.includes('三个月') || c.includes('3个月')) return 'warning'
+  if (c.includes('两个月') || c.includes('2个月')) return 'warning'
+  if (c.includes('一个月') || c.includes('1个月')) return 'primary'
   if (c === '未分类') return 'info'
   return 'success'
 }
@@ -722,20 +683,6 @@ async function loadCpSummary() {
   }
 }
 
-async function loadCpAging() {
-  const sp = selectedSalesperson.value || ''
-  if (!sp) {
-    cpAging.value = []
-    return
-  }
-  try {
-    const res = await request.get('/customer-platform-unpaid/aging', { params: { salesperson: sp } })
-    cpAging.value = res.segments || []
-  } catch {
-    cpAging.value = []
-  }
-}
-
 async function loadCpDetail() {
   const sp = selectedSalesperson.value || ''
   if (!sp) {
@@ -768,7 +715,6 @@ async function loadData(silent) {
   if (!selectedSalesperson.value) {
     mySummary.value = { hasData: false }
     cpSummary.value = { total: 0, snapshotDate: '' }
-    cpAging.value = []
     detailRows.value = []
     cpDetailRows.value = []
     customerList.value = []
@@ -779,7 +725,9 @@ async function loadData(silent) {
   if (!silent) loading.value = true
   try {
     // 客户名单跟其它数据一起拉：它决定下拉里能选谁，分开拉会出现「先能选、随后又变空」
-    await Promise.all([loadSummary(), loadCpSummary(), loadCpAging(), loadCustomerList()])
+    // （2026-10-19：账龄分布卡已取消，不再请求 /customer-platform-unpaid/aging，
+    //  账龄改由 /detail 每行直接返回，一次请求就够）
+    await Promise.all([loadSummary(), loadCpSummary(), loadCustomerList()])
     if (currentBiz.value === 'customer_platform') {
       await loadCpDetail()
     } else {
