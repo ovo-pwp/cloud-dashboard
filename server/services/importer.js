@@ -192,11 +192,22 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
       amount_2m: amount2m,
       amount_1m: amount1m,
       amount_current: amountCurrent,
-      follow_up_note: toText(r[12]),
+      // 备注（跟进情况）不再从源表带入（2026-10-19 使用者决定）：
+      //   以前这里 toText(r[12]) 会拿源表第 13 列覆盖掉使用者在系统里填的备注，
+      //   而且同步是「DELETE 整批 + INSERT 重建」，一同步就把手写备注冲没了。
+      //   现在备注只在系统里加、只在系统里存 —— 独立表 detail_note（主键 biz_type+doc_no），
+      //   导入完全不碰它。这里固定置 null，receivable_detail.follow_up_note 随之退役。
+      follow_up_note: null,
       // 第 14 列 = 源表那一列「地址」。未开票那张表没有这列，取到就是 null。
       // ⚠️ 源表里填的是**完整地址**（`广西南宁市青秀区古城路39号`），
       //    循环结束后统一用 toCityBatch 归一化成**只到市**，见下方注释。
       city: toText(r[13]) || null,
+      // 第 15 列 = 「行系」（2026-10-19 加，使用者「明细把行系和地区也展示出来」）。
+      //   值 = 工行/中行/建行/农信/邮储/农行/其他金融行业-桂林银行/非金融行业-*。
+      //   ⚠️ 只有「已发货未开票」源表(对账表)有这列；「已开票未回款」源表(开票表)没有
+      //      ⇒ 那条线恒为 null，明细页显示空。两线列序靠取数脚本补齐占位列保持一致
+      //      （见 kdocs_pull.py 里「…备注 | 地址 | 行系」的注释）。
+      row_system: toText(r[14]) || null,
       data_warning: dataWarning,
     })
   }
@@ -241,7 +252,7 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
       'customer_name', 'permission_raw', 'salesperson_raw', 'department',
       'salesperson', 'amount_total', 'amount_over3m', 'amount_3m',
       'amount_2m', 'amount_1m', 'amount_current', 'follow_up_note', 'data_warning',
-      'city',
+      'city', 'row_system',
     ]
     const placeholders = cols.map((_, idx) => `$${idx + 1}`).join(',')
 
@@ -305,6 +316,69 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
     skipped,
   }
 }
+
+/**
+ * 从「客户平台」客户名解析出城市（2026-10-19 地区列专用）。
+ *
+ * 源表（客户未回款平台 sheet 196）没地址列，但客户名格式稳定有两种：
+ *   ① "广西工行（营销品及办公用品）-工行崇左分行-崇左市-线下"  → 含 "XX市"
+ *   ② "中国工商银行股份有限公司梧州分行"                     → 以 "XX分行/支行/分理处" 结尾
+ * 表里 26 个唯一客户名几乎都是工行，模式固定 ⇒ 这两条够用。
+ *
+ * 🔴 ② 必须是「白名单匹配」而不是正则抽取。
+ *   最初写成 /([\u4e00-\u9fa5]{2,4})(?:分行|支行|分理处)/ 会把
+ *   「中国工商银行股份有限公司来宾分行」抽成「公司来宾市」——
+ *   因为"股份有限公司"这几个字也被当成了市名的一部分。
+ *   改成先扫一遍已知地名，命中才算，宁可留空（前端显示「—」）也不给出错误地区。
+ */
+const GUANGXI_CITY_TOKENS = [
+  '南宁市', '柳州市', '桂林市', '梧州市', '北海市',
+  '防城港市', '钦州市', '贵港市', '玉林市', '百色市',
+  '贺州市', '河池市', '来宾市', '崇左市',
+]
+
+/** 名字里常见的「不是市但能定位到市」的写法 → 归一化到所属地级市（只放确定的，不确定的宁可留空） */
+const PLATFORM_CITY_ALIASES = {
+  横县: '南宁市', 横州市: '南宁市',
+  藤县: '梧州市',
+  // 工行东盟支行（东盟商务区位于南宁市江南区）——源表里写的是"东盟商务支行"，
+  // 名字里没有"南宁"两个字，不加这条会解析不到（实测 6 行 / 7,620 元）。
+  东盟商务: '南宁市',
+}
+
+/** 「XX分行 / XX支行 / XX分理处」里的 XX 必须是下面这些字样之一，才认为是地名 */
+const PLATFORM_BRANCH_TOKENS = [
+  ...GUANGXI_CITY_TOKENS.map((c) => c.replace(/市$/, '')), // 南宁 / 柳州 / ……
+  ...Object.keys(PLATFORM_CITY_ALIASES),                    // 横县 / 藤县 …
+]
+
+function parsePlatformCustomerCity(name) {
+  const s = String(name || '').trim()
+  if (!s) return null
+  // ① 直接命中"XX市"（长的优先，防城港市先于港市）
+  for (const c of GUANGXI_CITY_TOKENS) {
+    if (s.includes(c)) return c
+  }
+  // ② 白名单匹配"XX分行/XX支行/XX分理处"
+  //    必须整体判空：只看"含南宁"是不够的（"南宁"可能出现在分行名之外的字串里）
+  for (const t of PLATFORM_BRANCH_TOKENS) {
+    const plain = t.replace(/市$/, '')
+    if (
+      s.includes(t + '分行') || s.includes(t + '支行') || s.includes(t + '分理处') ||
+      s.includes(plain + '分行') || s.includes(plain + '支行') || s.includes(plain + '分理处')
+    ) {
+      return PLATFORM_CITY_ALIASES[t] || plain + '市'
+    }
+  }
+  // ③ 只出现地名、但没有分行/支行后缀（如"横州市支行"已由②覆盖；这里兜底裸地名）
+  for (const t of PLATFORM_BRANCH_TOKENS) {
+    if (s.includes(t)) return PLATFORM_CITY_ALIASES[t] || t + '市'
+  }
+  return null
+}
+// 导出一份给回填脚本用：回填和后续导入必须是同一套规则，
+// 否则「今天回填出来的地区」和「下周新导入的地区」会对不上。
+export { parsePlatformCustomerCity }
 
 // ------------------------------------------------------------
 // 客户平台未回款导入（订单级明细，独立表 customer_platform_unpaid）
@@ -386,6 +460,8 @@ export async function importCustomerPlatformUnpaid(pool, { xlsxPath, snapshotDat
       account_customer: accountCustomer,
       salesperson: col(at(r, '业务员')) || '未指定',
       remark: col(at(r, '备注')),
+      // 地区（2026-10-19）：源表无地址列，从 customer_name 解析；解析不到就 null
+      city: parsePlatformCustomerCity(customerName),
     })
   }
 
@@ -461,7 +537,7 @@ export async function importCustomerPlatformUnpaid(pool, { xlsxPath, snapshotDat
       'purchase_amount', 'invoice_status', 'receiver', 'purchase_unit_price',
       'sales_unit_price', 'sales_amount', 'sales_amount_total', 'guided_sales_amount',
       'self_check', 'diff_adjustment', 'report_plan_no', 'account_customer',
-      'salesperson', 'remark',
+      'salesperson', 'remark', 'city',
     ]
     const placeholders = cols.map((_, idx) => `$${idx + 1}`).join(',')
 

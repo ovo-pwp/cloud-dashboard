@@ -79,6 +79,7 @@ CREATE TABLE receivable_detail (
   amount_current  NUMERIC(16,2) NOT NULL DEFAULT 0,
 
   city            VARCHAR(50),                 -- 城市（源表「地址」列，仅「已开票未回款」有值）
+  row_system      VARCHAR(50),                 -- 行系（工行/中行/建行…，仅「已发货未开票」源表有值）
   follow_up_note  TEXT,
   data_warning    TEXT,                        -- 数据质量提示（如账龄分档对不上）
 
@@ -93,11 +94,31 @@ CREATE INDEX idx_rd_customer     ON receivable_detail(customer_name);
 CREATE INDEX idx_rd_salesperson  ON receivable_detail(salesperson);
 CREATE INDEX idx_rd_department   ON receivable_detail(department);
 CREATE INDEX idx_rd_aging        ON receivable_detail(aging_category);
+CREATE INDEX idx_rd_row_system   ON receivable_detail(row_system);
 
 COMMENT ON TABLE  receivable_detail          IS '未回款/未开票明细，每行一条业务单据';
 COMMENT ON COLUMN receivable_detail.doc_no   IS '单据编号（未回款=开票方案编号，未开票=合同执行编号）';
 COMMENT ON COLUMN receivable_detail.doc_date IS '单据日期（未回款=开票日期，未开票=执行日期）';
 COMMENT ON COLUMN receivable_detail.data_warning IS '数据质量提示；非空表示该行账龄分档与总额不符等';
+
+-- ------------------------------------------------------------
+-- 备注（跟进情况）独立表 —— 2026-10-19 起与源表导入解耦
+--
+-- 以前备注存在 receivable_detail.follow_up_note，但每次同步是「DELETE 整批 + INSERT 重建」，
+-- 且 importer 拿源表备注覆盖它 ⇒ 使用者在系统里填的跟进情况会在下次同步被冲掉。
+-- 现改为：备注只在系统里加、只在系统里存，按「单据号」一份（主键 biz_type + doc_no），
+-- 导入完全不碰这张表。receivable_detail.follow_up_note 保留但已退役（导入恒置 NULL）。
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS detail_note (
+  biz_type    VARCHAR(30)  NOT NULL,   -- billed_unpaid / shipped_uninvoiced
+  doc_no      VARCHAR(30)  NOT NULL,
+  note        TEXT,
+  updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+  updated_by  VARCHAR(50),
+  PRIMARY KEY (biz_type, doc_no)
+);
+COMMENT ON TABLE  detail_note IS '单据备注（跟进情况），按单据号一份，与源表导入解耦';
+COMMENT ON COLUMN detail_note.doc_no IS '单据编号（未回款=开票方案编号，未开票=合同执行编号）';
 
 -- ------------------------------------------------------------
 -- 视图 1：按业务员 × 账龄档（看板主表）
@@ -216,11 +237,13 @@ CREATE TABLE IF NOT EXISTS customer_platform_unpaid (
   report_plan_no      VARCHAR(50),               -- 报账方案编号
   account_customer    VARCHAR(200),              -- 挂账客户
   salesperson         VARCHAR(100),              -- 业务员
-  remark              TEXT,                      -- 备注
+  remark              TEXT,                      -- 源表「备注*」标记列（用于过滤"无效单"，不在界面展示）
+  city                VARCHAR(50),               -- 地区（2026-10-19 加：源表无地址列，从 customer_name 解析"XX市/XX分行"得到）
   created_at          TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_cpu_snapshot ON customer_platform_unpaid(snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_cpu_city     ON customer_platform_unpaid(city);
 CREATE INDEX IF NOT EXISTS idx_cpu_customer ON customer_platform_unpaid(account_customer);
 CREATE INDEX IF NOT EXISTS idx_cpu_platform ON customer_platform_unpaid(platform);
 

@@ -123,7 +123,7 @@
           <el-table-column label="城市" prop="city" width="100" align="center">
             <template #default="{ row }">{{ row.city || '—' }}</template>
           </el-table-column>
-          <el-table-column label="备注" prop="note" min-width="140" show-overflow-tooltip>
+          <el-table-column label="进度反馈" prop="note" min-width="140" show-overflow-tooltip>
             <template #default="{ row }">{{ row.note || '—' }}</template>
           </el-table-column>
         </el-table>

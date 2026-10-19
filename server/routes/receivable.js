@@ -26,6 +26,7 @@ import {
   REMEMBER_TTL,
 } from '../services/syncAuth.js'
 import { checkThrottle, THROTTLE } from '../services/loginThrottle.js'
+import { issueCaptcha, verifyCaptcha, CAPTCHA_TTL_SEC } from '../services/captcha.js'
 import { buildXlsx, sendXlsx, safeFilename } from '../services/exportExcel.js'
 
 const router = Router()
@@ -53,6 +54,29 @@ function clientIp(req) {
   }
   const ip = req.socket?.remoteAddress || req.ip || ''
   return String(ip).replace(/^::ffff:/, '').slice(0, 64)
+}
+
+// ------------------------------------------------------------
+// 登录验证码（2026-10-19）
+//   LOGIN_CAPTCHA_ENABLED=true        是否启用（默认关闭）
+//   LOGIN_CAPTCHA_LOCAL_BYPASS=true   本机回环免验证码（默认 true）—— 给本机验证脚本用。
+//                                     公网请求经 Cloudflare Tunnel 会带真实 IP（TRUST_PROXY=true），
+//                                     不命中这条，所以公网访问照样要验证码。
+// ------------------------------------------------------------
+const CAPTCHA_ENABLED = String(process.env.LOGIN_CAPTCHA_ENABLED || '').toLowerCase() === 'true'
+const CAPTCHA_LOCAL_BYPASS = String(process.env.LOGIN_CAPTCHA_LOCAL_BYPASS || 'true').toLowerCase() !== 'false'
+
+/** 本机回环（clientIp 已去掉 ::ffff: 前缀） */
+function isLoopback(ip) {
+  const s = String(ip || '')
+  return s === '::1' || s === '127.0.0.1' || s === 'localhost'
+}
+
+/** 本次请求是否需要验证码 */
+function captchaRequired(req) {
+  if (!CAPTCHA_ENABLED) return false
+  if (CAPTCHA_LOCAL_BYPASS && isLoopback(clientIp(req))) return false
+  return true
 }
 
 /**
@@ -83,6 +107,13 @@ async function logLogin({ username, success, reason, req }) {
 //   GET  /api/me      查当前登录状态
 //   POST /api/logout  退出
 // ------------------------------------------------------------
+/** GET /api/captcha —— 出题（不需要登录） */
+router.get('/captcha', (req, res) => {
+  if (!captchaRequired(req)) return res.json({ enabled: false })
+  const c = issueCaptcha()
+  res.json({ enabled: true, token: c.token, question: c.question, ttlSec: CAPTCHA_TTL_SEC })
+})
+
 router.post('/login', async (req, res) => {
   if (!isLoginEnabled()) {
     return res.json({ loginEnabled: false, token: null, message: '未启用登录保护' })
@@ -104,6 +135,18 @@ router.post('/login', async (req, res) => {
       maxFails: THROTTLE.maxFails,
       windowMinutes: THROTTLE.windowMinutes,
     })
+  }
+
+  // ---------- 验证码：公网必过；本机回环按配置可免 ----------
+  if (captchaRequired(req)) {
+    const { captchaToken, captchaAnswer } = req.body || {}
+    if (!verifyCaptcha(captchaToken, captchaAnswer)) {
+      await logLogin({ username: name, success: false, reason: '验证码错误', req })
+      return res.status(400).json({
+        code: 'CAPTCHA_INVALID',
+        error: '验证码不对或已过期，请重新输入',
+      })
+    }
   }
 
   const result = verifyLogin(username, password)
@@ -258,6 +301,19 @@ router.get('/login-users', requireRole(ROLE_ADMIN), (req, res) => {
 const BIZ_TYPES = {
   billed_unpaid: '已开票未回款',
   shipped_uninvoiced: '已发货未开票',
+}
+
+/**
+ * 「进度反馈」允许的业务类型 = 应收两条线 + 客户平台。
+ *
+ * 为什么不直接把 customer_platform 塞进 BIZ_TYPES：BIZ_TYPES 是
+ * receivable_detail 的业务线字典（全站各处拿它取中文名、判断是不是应收线），
+ * 往里加第三个会让 /detail、/trend、导出等一堆地方都以为多了一条应收线。
+ * 这里单独开一个集合，只给备注写入用，范围最小。
+ */
+const NOTE_BIZ_TYPES = {
+  ...BIZ_TYPES,
+  customer_platform: '客户平台未回款',
 }
 
 /** 校验并取业务类型，默认 billed_unpaid */
@@ -617,40 +673,40 @@ function buildDetailFilter(req, batchId) {
   const from = normalizeDate(req.query.from)
   const to = normalizeDate(req.query.to)
 
-  const conditions = ['batch_id = $1']
+  const conditions = ['d.batch_id = $1']
   const params = [batchId]
 
   if (salesperson) {
     params.push(salesperson)
-    conditions.push(`salesperson = $${params.length}`)
+    conditions.push(`d.salesperson = $${params.length}`)
   }
   if (customer) {
     params.push(customer)
-    conditions.push(`customer_name = $${params.length}`)
+    conditions.push(`d.customer_name = $${params.length}`)
   }
   if (city) {
     params.push(city)
-    conditions.push(`city = $${params.length}`)
+    conditions.push(`d.city = $${params.length}`)
   }
   if (agingCategory) {
     if (agingCategory === '未分类') {
-      conditions.push(`aging_category IS NULL`)
+      conditions.push(`d.aging_category IS NULL`)
     } else {
       params.push(agingCategory)
-      conditions.push(`aging_category = $${params.length}`)
+      conditions.push(`d.aging_category = $${params.length}`)
     }
   }
   if (from) {
     params.push(from)
-    conditions.push(`doc_date >= $${params.length}`)
+    conditions.push(`d.doc_date >= $${params.length}`)
   }
   if (to) {
     params.push(to)
-    conditions.push(`doc_date <= $${params.length}`)
+    conditions.push(`d.doc_date <= $${params.length}`)
   }
   if (keyword) {
     params.push(`%${keyword}%`)
-    conditions.push(`(doc_no ILIKE $${params.length} OR customer_name ILIKE $${params.length})`)
+    conditions.push(`(d.doc_no ILIKE $${params.length} OR d.customer_name ILIKE $${params.length})`)
   }
 
   return { where: conditions.join(' AND '), params }
@@ -667,25 +723,25 @@ function buildDetailFilter(req, batchId) {
  *   （「三个月以上未回款」「3个月以上」），按文本排会乱序。
  */
 const AGING_ORDER_SQL = `CASE
-          WHEN amount_over3m  <> 0 THEN 1
-          WHEN amount_3m      <> 0 THEN 2
-          WHEN amount_2m      <> 0 THEN 3
-          WHEN amount_1m      <> 0 THEN 4
-          WHEN amount_current <> 0 THEN 5
+          WHEN d.amount_over3m  <> 0 THEN 1
+          WHEN d.amount_3m      <> 0 THEN 2
+          WHEN d.amount_2m      <> 0 THEN 3
+          WHEN d.amount_1m      <> 0 THEN 4
+          WHEN d.amount_current <> 0 THEN 5
           ELSE 6 END`
 
 const DETAIL_SORTABLE = {
-  amountTotal: 'amount_total',
-  docDate: 'doc_date',
-  docNo: 'doc_no',
-  customer: 'customer_name',
+  amountTotal: 'd.amount_total',
+  docDate: 'd.doc_date',
+  docNo: 'd.doc_no',
+  customer: 'd.customer_name',
   // 前端「账龄」列的表头点击排序走这个键
   agingCategory: AGING_ORDER_SQL,
-  over3m: 'amount_over3m',
-  m3: 'amount_3m',
-  m2: 'amount_2m',
-  m1: 'amount_1m',
-  currentMonth: 'amount_current',
+  over3m: 'd.amount_over3m',
+  m3: 'd.amount_3m',
+  m2: 'd.amount_2m',
+  m1: 'd.amount_1m',
+  currentMonth: 'd.amount_current',
 }
 
 /**
@@ -696,9 +752,9 @@ const DETAIL_SORTABLE = {
  */
 function detailOrderBy(sortBy, sortOrder) {
   const known = sortBy && Object.prototype.hasOwnProperty.call(DETAIL_SORTABLE, sortBy)
-  if (!known) return `${AGING_ORDER_SQL} ASC, amount_total DESC, id ASC`
+  if (!known) return `${AGING_ORDER_SQL} ASC, d.amount_total DESC, d.id ASC`
   const dir = String(sortOrder).toLowerCase() === 'asc' ? 'ASC' : 'DESC'
-  return `${DETAIL_SORTABLE[sortBy]} ${dir}, amount_total DESC, id ASC`
+  return `${DETAIL_SORTABLE[sortBy]} ${dir}, d.amount_total DESC, d.id ASC`
 }
 
 /** 明细导出列（与「明细查询」页表格逐列对应） */
@@ -709,34 +765,36 @@ const DETAIL_EXPORT_COLUMNS = [
   { key: 'customer', label: '挂账客户' },
   { key: 'salesperson', label: '业务员' },
   { key: 'city', label: '城市' },
+  { key: 'rowSystem', label: '行系' },
   { key: 'amountTotal', label: '金额(元)', money: true },
   { key: 'over3m', label: '3个月以上', money: true },
   { key: 'm3', label: '3个月', money: true },
   { key: 'm2', label: '2个月', money: true },
   { key: 'm1', label: '1个月', money: true },
   { key: 'currentMonth', label: '当月', money: true },
-  { key: 'note', label: '备注' },
+  { key: 'note', label: '进度反馈' },
   { key: 'reminder', label: '人工提醒' },
   { key: 'warning', label: '提醒' },
 ]
 
 /** 导出用的数据列 SQL（与 DETAIL_EXPORT_COLUMNS 对齐） */
 const DETAIL_EXPORT_SELECT = `
-  doc_no                              AS "docNo",
-  to_char(doc_date, 'YYYY-MM-DD')     AS "docDate",
-  COALESCE(aging_category, '未分类')  AS "agingCategory",
-  customer_name                       AS "customer",
-  salesperson,
-  city,
-  amount_total::float8                AS "amountTotal",
-  amount_over3m::float8               AS "over3m",
-  amount_3m::float8                   AS "m3",
-  amount_2m::float8                   AS "m2",
-  amount_1m::float8                   AS "m1",
-  amount_current::float8              AS "currentMonth",
-  follow_up_note                      AS "note",
-  manual_reminder                     AS "reminder",
-  data_warning                        AS "warning"
+  d.doc_no                            AS "docNo",
+  to_char(d.doc_date, 'YYYY-MM-DD')   AS "docDate",
+  COALESCE(d.aging_category, '未分类') AS "agingCategory",
+  d.customer_name                     AS "customer",
+  d.salesperson,
+  d.city,
+  d.row_system                      AS "rowSystem",
+  d.amount_total::float8              AS "amountTotal",
+  d.amount_over3m::float8             AS "over3m",
+  d.amount_3m::float8                 AS "m3",
+  d.amount_2m::float8                 AS "m2",
+  d.amount_1m::float8                 AS "m1",
+  d.amount_current::float8            AS "currentMonth",
+  n.note                              AS "note",
+  d.manual_reminder                   AS "reminder",
+  d.data_warning                      AS "warning"
 `
 
 /** 单次导出的行数上限，避免一个大查询把服务打满 */
@@ -763,13 +821,13 @@ router.get('/detail', async (req, res, next) => {
 
     const countRes = await query(
       `SELECT COUNT(*)           AS cnt,
-              COALESCE(SUM(amount_total),  0) AS total,
-              COALESCE(SUM(amount_over3m), 0) AS over3m,
-              COALESCE(SUM(amount_3m),     0) AS m3,
-              COALESCE(SUM(amount_2m),     0) AS m2,
-              COALESCE(SUM(amount_1m),     0) AS m1,
-              COALESCE(SUM(amount_current),0) AS current_month
-         FROM receivable_detail WHERE ${where}`,
+              COALESCE(SUM(d.amount_total),  0) AS total,
+              COALESCE(SUM(d.amount_over3m), 0) AS over3m,
+              COALESCE(SUM(d.amount_3m),     0) AS m3,
+              COALESCE(SUM(d.amount_2m),     0) AS m2,
+              COALESCE(SUM(d.amount_1m),     0) AS m1,
+              COALESCE(SUM(d.amount_current),0) AS current_month
+         FROM receivable_detail d WHERE ${where}`,
       params
     )
     const count = Number(countRes.rows[0].cnt)
@@ -792,25 +850,28 @@ router.get('/detail', async (req, res, next) => {
 
     const { rows } = await query(
       `SELECT
-         id,
-         doc_no                              AS "docNo",
-         to_char(doc_date, 'YYYY-MM-DD')     AS "docDate",
-         COALESCE(aging_category, '未分类')  AS "agingCategory",
-         customer_name                       AS "customer",
-         permission_raw                      AS "permission",
-         salesperson,
-         department,
-         city,
-         amount_total::float8                AS "amountTotal",
-         amount_over3m::float8               AS "over3m",
-         amount_3m::float8                   AS "m3",
-         amount_2m::float8                   AS "m2",
-         amount_1m::float8                   AS "m1",
-         amount_current::float8              AS "currentMonth",
-         follow_up_note                      AS "note",
-         manual_reminder                     AS "reminder",
-         data_warning                        AS "warning"
-       FROM receivable_detail
+         d.id,
+         d.doc_no                            AS "docNo",
+         to_char(d.doc_date, 'YYYY-MM-DD')   AS "docDate",
+         COALESCE(d.aging_category, '未分类') AS "agingCategory",
+         d.customer_name                     AS "customer",
+         d.permission_raw                    AS "permission",
+         d.salesperson,
+         d.department,
+         d.city,
+         d.row_system                      AS "rowSystem",
+         d.amount_total::float8              AS "amountTotal",
+         d.amount_over3m::float8             AS "over3m",
+         d.amount_3m::float8                 AS "m3",
+         d.amount_2m::float8                 AS "m2",
+         d.amount_1m::float8                 AS "m1",
+         d.amount_current::float8            AS "currentMonth",
+         n.note                              AS "note",
+         d.manual_reminder                   AS "reminder",
+         d.data_warning                      AS "warning"
+       FROM receivable_detail d
+       LEFT JOIN detail_note n
+              ON n.biz_type = d.biz_type AND n.doc_no = d.doc_no
       WHERE ${where}
       ORDER BY ${orderBy}
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -875,7 +936,46 @@ function makeTextUpdater({ column, field, label, maxLen }) {
 router.put(
   '/detail/note',
   requireRole(...CAN_EDIT_DETAIL),
-  makeTextUpdater({ column: 'follow_up_note', field: 'note', label: '备注', maxLen: 2000 })
+  async (req, res, next) => {
+    try {
+      // 备注现在按「单据号」一份、存独立表 detail_note（主键 biz_type + doc_no），
+      // 与源表导入彻底解耦（2026-10-19 使用者决定：备注只在系统里加、只在系统里存）。
+      // 请求体：{ bizType, docNo, note }（docNo = 明细行的 docNo，前端 row 里就有）
+      const bizType = req.body?.bizType
+      const docNo = String(req.body?.docNo ?? '').trim()
+      const text = typeof req.body?.note === 'string' ? req.body.note : ''
+
+      if (!NOTE_BIZ_TYPES[bizType]) {
+        return res.status(400).json({ error: '缺少有效的业务类型' })
+      }
+      if (!docNo) {
+        return res.status(400).json({ error: '缺少有效的单据编号' })
+      }
+      if (text.length > 2000) {
+        return res.status(400).json({ error: '进度反馈内容过长（最多 2000 字）' })
+      }
+
+      const value = text.trim() ? text : null
+      const who = req.user || null
+
+      if (value === null) {
+        // 清空：删掉这条备注（不存在也算成功，幂等）
+        await query('DELETE FROM detail_note WHERE biz_type = $1 AND doc_no = $2', [bizType, docNo])
+      } else {
+        await query(
+          `INSERT INTO detail_note (biz_type, doc_no, note, updated_by, updated_at)
+           VALUES ($1, $2, $3, $4, now())
+           ON CONFLICT (biz_type, doc_no)
+           DO UPDATE SET note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [bizType, docNo, value, who]
+        )
+      }
+
+      res.json({ ok: true, bizType, docNo, note: value })
+    } catch (err) {
+      next(err)
+    }
+  }
 )
 
 router.put(
@@ -906,7 +1006,7 @@ router.get('/export/detail', requireRole(...CAN_EXPORT), async (req, res, next) 
 
     // 先数一下行数，超上限就别白跑一趟大查询
     const cntRes = await query(
-      `SELECT COUNT(*)::int AS cnt FROM receivable_detail WHERE ${where}`,
+      `SELECT COUNT(*)::int AS cnt FROM receivable_detail d WHERE ${where}`,
       params
     )
     const count = cntRes.rows[0].cnt
@@ -921,7 +1021,9 @@ router.get('/export/detail', requireRole(...CAN_EXPORT), async (req, res, next) 
 
     const { rows } = await query(
       `SELECT ${DETAIL_EXPORT_SELECT}
-         FROM receivable_detail
+         FROM receivable_detail d
+         LEFT JOIN detail_note n
+                ON n.biz_type = d.biz_type AND n.doc_no = d.doc_no
         WHERE ${where}
         ORDER BY ${detailOrderBy(req.query.sortBy, req.query.sortOrder)}`,
       params
@@ -978,7 +1080,7 @@ router.get('/filters', async (req, res, next) => {
     const bizType = resolveBizType(req)
     const batch = await getLatestBatch(bizType)
     if (!batch) {
-      return res.json({ salespeople: [], customers: [], agingCategories: [], cities: [], bizType })
+      return res.json({ salespeople: [], customers: [], agingCategories: [], cities: [], rowSystems: [], bizType })
     }
 
     // 可选按业务员过滤「客户」候选：「我的业绩」页只想列这个人自己的客户，
@@ -989,7 +1091,7 @@ router.get('/filters', async (req, res, next) => {
       ? 'batch_id = $1 AND salesperson = $2'
       : 'batch_id = $1'
 
-    const [sp, cu, ag, ct] = await Promise.all([
+    const [sp, cu, ag, ct, rs] = await Promise.all([
       query(
         `SELECT DISTINCT salesperson, department FROM receivable_detail
           WHERE batch_id = $1 ORDER BY salesperson`,
@@ -1011,6 +1113,12 @@ router.get('/filters', async (req, res, next) => {
           WHERE batch_id = $1 AND city IS NOT NULL AND city <> '' ORDER BY city`,
         [batch.id]
       ),
+      // 行系：与城市相反 —— 只有「已发货未开票」源表有这列，未回款取到全是 NULL
+      query(
+        `SELECT DISTINCT row_system FROM receivable_detail
+          WHERE batch_id = $1 AND row_system IS NOT NULL AND row_system <> '' ORDER BY row_system`,
+        [batch.id]
+      ),
     ])
 
     res.json({
@@ -1019,6 +1127,7 @@ router.get('/filters', async (req, res, next) => {
       customers: cu.rows.map((r) => r.customer_name),
       agingCategories: ag.rows.map((r) => r.cat),
       cities: ct.rows.map((r) => r.city),
+      rowSystems: rs.rows.map((r) => r.row_system),
     })
   } catch (err) {
     next(err)
@@ -1648,27 +1757,31 @@ const CPU_EXPORT_COLUMNS = [
   { key: 'orderNo', label: '订单号' },
   { key: 'customer', label: '客户' },
   { key: 'accountCustomer', label: '平台账号客户' },
+  { key: 'city', label: '地区' },
   { key: 'product', label: '商品' },
   { key: 'qty', label: '数量' },
   { key: 'amountTotal', label: '金额(元)', money: true },
   { key: 'salesperson', label: '业务员' },
   { key: 'paymentStatus', label: '回款状态' },
   { key: 'invoiceStatus', label: '开票状态' },
+  { key: 'note', label: '进度反馈' },
 ]
 
-/** 与 CPU_EXPORT_COLUMNS 对齐的导出查询列 */
+/** 与 CPU_EXPORT_COLUMNS 对齐的导出查询列（列名全部带 c. 前缀，因为要 JOIN detail_note） */
 const CPU_EXPORT_SELECT = `
-  platform,
-  to_char(order_date,'YYYY-MM-DD')                          AS "orderDate",
-  customer_order_no                                         AS "orderNo",
-  COALESCE(NULLIF(customer_name,''), account_customer, '—')  AS "customer",
-  account_customer                                          AS "accountCustomer",
-  product_name                                              AS "product",
-  qty::float8                                               AS "qty",
-  ${CPU_AMOUNT_COL}::float8                                 AS "amountTotal",
-  salesperson,
-  payment_status                                            AS "paymentStatus",
-  invoice_status                                            AS "invoiceStatus"
+  c.platform,
+  to_char(c.order_date,'YYYY-MM-DD')                     AS "orderDate",
+  c.customer_order_no                                     AS "orderNo",
+  COALESCE(NULLIF(c.customer_name,''), c.account_customer, '—')  AS "customer",
+  c.account_customer                                      AS "accountCustomer",
+  c.city,
+  c.product_name                                          AS "product",
+  c.qty::float8                                           AS "qty",
+  ${CPU_AMOUNT_COL}::float8                               AS "amountTotal",
+  c.salesperson,
+  c.payment_status                                        AS "paymentStatus",
+  c.invoice_status                                        AS "invoiceStatus",
+  n.note                                                   AS "note"
 `
 
 // GET /api/customer-platform-unpaid/detail  订单级明细
@@ -1694,21 +1807,25 @@ router.get('/customer-platform-unpaid/detail', async (req, res, next) => {
 
     const { rows } = await query(
       `SELECT
-         platform,
-         to_char(order_date,'YYYY-MM-DD') AS "orderDate",
-         company_name AS "company",
-         customer_order_no AS "orderNo",
-         customer_name AS "customerName",
-         account_customer AS "accountCustomer",
-         COALESCE(NULLIF(account_customer,''), customer_name, '') AS "customer",
-         payment_status AS "paymentStatus",
-         product_name AS "product",
-         qty::float8 AS "qty",
+         c.platform,
+         to_char(c.order_date,'YYYY-MM-DD') AS "orderDate",
+         c.company_name AS "company",
+         c.customer_order_no AS "orderNo",
+         c.customer_name AS "customerName",
+         c.account_customer AS "accountCustomer",
+         COALESCE(NULLIF(c.account_customer,''), c.customer_name, '') AS "customer",
+         c.payment_status AS "paymentStatus",
+         c.product_name AS "product",
+         c.qty::float8 AS "qty",
          ${CPU_AMOUNT_COL}::float8 AS "amountTotal",
-         salesperson,
-         report_plan_no AS "planNo",
-         invoice_status AS "invoiceStatus"
-       FROM customer_platform_unpaid
+         c.salesperson,
+         c.report_plan_no AS "planNo",
+         c.invoice_status AS "invoiceStatus",
+         c.city,
+         n.note AS "note"
+       FROM customer_platform_unpaid c
+       LEFT JOIN detail_note n
+              ON n.biz_type = 'customer_platform' AND n.doc_no = c.customer_order_no
       WHERE ${where}
       ORDER BY ${CPU_AMOUNT_COL} DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -1758,7 +1875,9 @@ router.get('/export/customer-platform-detail', requireRole(...CAN_EXPORT), async
 
     const { rows } = await query(
       `SELECT ${CPU_EXPORT_SELECT}
-         FROM customer_platform_unpaid
+         FROM customer_platform_unpaid c
+         LEFT JOIN detail_note n
+                ON n.biz_type = 'customer_platform' AND n.doc_no = c.customer_order_no
         WHERE ${where}
         ORDER BY ${CPU_AMOUNT_COL} DESC`,
       params
@@ -1936,33 +2055,36 @@ router.get('/priority/actions', async (req, res, next) => {
     const filterKeyword = req.query.filterKeyword || null
 
     // 只取筛选需要的列；金额用 amount_total（该表口径，与 /summary 一致）
-    let whereClause = `WHERE batch_id = $1`
+    let whereClause = `WHERE d.batch_id = $1`
     const params = [batch.id]
     let paramIdx = 2
 
     if (filterAging) {
-      whereClause += ` AND aging_category ILIKE $${paramIdx++}`
+      whereClause += ` AND d.aging_category ILIKE $${paramIdx++}`
       params.push(`%${filterAging}月%`)
     }
     if (filterSalesperson) {
-      whereClause += ` AND salesperson = $${paramIdx++}`
+      whereClause += ` AND d.salesperson = $${paramIdx++}`
       params.push(filterSalesperson)
     }
     if (filterKeyword) {
-      whereClause += ` AND (customer_name ILIKE $${paramIdx++} OR doc_no ILIKE $${paramIdx++})`
+      whereClause += ` AND (d.customer_name ILIKE $${paramIdx++} OR d.doc_no ILIKE $${paramIdx++})`
       params.push(`%${filterKeyword}%`, `%${filterKeyword}%`)
     }
 
     const { rows } = await query(
-      `SELECT doc_no                              AS "docNo",
-              to_char(doc_date,'YYYY-MM-DD')      AS "docDate",
-              COALESCE(aging_category,'未分类')   AS "agingCategory",
-              COALESCE(customer_name,'')          AS "customer",
-              COALESCE(salesperson,'')            AS "salesperson",
-              COALESCE(city,'')                   AS "city",
-              COALESCE(follow_up_note,'')         AS "note",
-              amount_total::float8                AS "amount"
-         FROM receivable_detail
+      `SELECT d.doc_no                            AS "docNo",
+              to_char(d.doc_date,'YYYY-MM-DD')    AS "docDate",
+              COALESCE(d.aging_category,'未分类') AS "agingCategory",
+              COALESCE(d.customer_name,'')        AS "customer",
+              COALESCE(d.salesperson,'')          AS "salesperson",
+              COALESCE(d.city,'')                 AS "city",
+              COALESCE(d.row_system,'')           AS "rowSystem",
+              COALESCE(n.note,'')                 AS "note",
+              d.amount_total::float8              AS "amount"
+         FROM receivable_detail d
+         LEFT JOIN detail_note n
+                ON n.biz_type = d.biz_type AND n.doc_no = d.doc_no
         ${whereClause}`,
       params
     )
@@ -2050,7 +2172,7 @@ router.get('/priority/actions', async (req, res, next) => {
 //       并标出「第一次出现 / 最后一次出现 / 当前最新批还在不在」
 //   权限：只读，登录即可（与明细页同级）。
 // ------------------------------------------------------------
-const TRACE_MAX_CANDIDATES = 20
+const TRACE_MAX_CANDIDATES = 50
 
 /** ILIKE 的通配符必须转义，否则用户输入一个 % 会把整库捞出来 */
 function escapeLike(s) {
@@ -2092,7 +2214,7 @@ router.get('/trace', async (req, res, next) => {
               COUNT(*)::int                    AS dup_rows
          FROM receivable_detail d
          JOIN import_batch b ON b.id = d.batch_id
-        WHERE d.doc_no ILIKE $1 ESCAPE '\\'
+        WHERE (d.doc_no ILIKE $1 ESCAPE '\\' OR d.customer_name ILIKE $1 ESCAPE '\\')
         GROUP BY d.biz_type, d.doc_no, b.snapshot_date, b.id
         ORDER BY d.biz_type, b.snapshot_date, b.id
         LIMIT 2000`,

@@ -184,31 +184,35 @@
       </el-card>
 
       <!--
-        当日明细（2026-10-14）：先加「当日回款明细」，随后使用者「新增的也加上」⇒ 两张同款表，新增在上、回款在下
-        （与「本期变动」块的分组顺序一致）。
-
-        🔴 **只未回款线**：未开票线对应「当日已开票 / 当日新增的已发货未开票」，使用者明确「开票的先不要」⇒ 切过去两张都不渲染
-           （由 `detailGroups` computed 返回空数组实现，不用在这里写 v-if）。
-        🔴 **要进导出图**（10-14 晚使用者「导出的图片怎么没有回款的」）—— 所以**不能挂 `no-export`**，
-           导出前也不再把它们移除。代价：图会随明细行数变高。
-        🔴 表尾合计用 `detailSummary`：**el-table 自带求和出的是裸数字**（45052.81），全站金额要千分位 + 2 位小数。
+        2026-10-17 使用者：「这个就归类到一起吧」——「当日新增明细」不再逐条列单据，
+        改为 `sumCards` 的「当日新增 · 按业务员 / 客户」（业务员 | 客户 | 张数 | 金额），与回款卡同族。
+        （新增恒「当月」档 ⇒ 不加账龄列；账龄列只给「流出」类卡片：当日回款 / 当日已开票。）
       -->
-      <el-card v-for="g in detailGroups" :key="g.key" shadow="never" class="block-card">
-        <template #header><span class="card-title">{{ g.title }}</span></template>
+
+      <!--
+        汇总卡（2026-10-15）：业务员 | 客户 | 张数 | 金额（元）。
+        使用者：「回款也是按照业务员来展现」「不是很理想按业务员来，次要是按照客户来」
+        ⇒ 汇总键 = 业务员(主) + 客户(次)，平铺；未回款线出「当日回款」，未开票线出「当日新增的未开票」。
+        🔴 **四块全部走汇总**：未回款线 = 当日新增 + 当日回款；未开票线 = 当日新增的未开票 + 当日已开票（2026-10-17 起逐条明细已取消）。
+        🔴 进导出图（不挂 no-export）；表头深藏蓝 #2c3e50 + 白字；金额右对齐 + 千分位 + 2 位小数。
+        🔴 **回款卡带「账龄」列**（2026-10-16 使用者「回款的是哪一个账龄的也写上去吧」）：同一客户可能跨多档，故汇总键含账龄；未开票新增恒为「当月」档，不带该列。
+      -->
+      <el-card v-for="c in sumCards" :key="c.key" shadow="never" class="block-card">
+        <template #header><span class="card-title">{{ c.title }}</span></template>
         <el-table
-          :data="g.rows"
+          :data="c.rows"
           border
           class="pay-detail"
           :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
           :cell-style="{ padding: '8px 0' }"
           show-summary
-          :summary-method="detailSummary"
+          :summary-method="summaryByProp"
         >
-          <el-table-column prop="doc_no" label="单据编号" min-width="130" show-overflow-tooltip />
-          <el-table-column prop="customer_name" label="客户名称" min-width="260" show-overflow-tooltip />
-          <el-table-column prop="salesperson" label="业务员" width="110" />
-          <el-table-column prop="aging_category" label="账龄" width="160" show-overflow-tooltip />
-          <el-table-column prop="amt" label="金额（元）" min-width="140" align="right">
+          <el-table-column prop="salesperson" label="业务员" min-width="120" />
+          <el-table-column prop="customer_name" label="客户" min-width="260" show-overflow-tooltip />
+          <el-table-column v-if="c.withAging" prop="aging_category" label="账龄" width="150" show-overflow-tooltip />
+          <el-table-column prop="count" label="张数" width="100" align="right" />
+          <el-table-column prop="amt" label="金额（元）" min-width="150" align="right">
             <template #default="{ row }"><span class="mx-amt">{{ num(row.amt) }}</span></template>
           </el-table-column>
         </el-table>
@@ -252,6 +256,22 @@ const salespersonList = ref([])
  * 一次请求就能拿到两组，别拉两次。
  */
 const deltaDetail = ref(null)
+
+/**
+ * 未开票线（已发货未开票）的「当日新增」明细（2026-10-15 新增）。
+ * 使用者：「现在需要改的地方是……未开票记录」「按业务员综合来」⇒ 未开票线**不列单条**，
+ * 只取真新增（账龄「当月」档）用来做**按业务员汇总**（业务员 | 张数 | 金额）。
+ * 数据与未回款线的「当日新增明细」同源：同一个 `line-delta` 接口，取 `added`（不含补录、不含当日已开票）。
+ */
+const uninvoicedAdded = ref(null)
+
+/**
+ * 未开票线的「当日已开票」（2026-10-17 使用者：「这里需要把开票的也给加上」）。
+ * 与「当日新增的未开票」对称：取 `line-delta` 的 `removed` —— 上一批在、这一批消失的未开票单
+ * ＝**今天开票了**（转到「已开票未回款」线），不是回款。
+ * 一张单可能来自不同账龄档 ⇒ 汇总时带账龄列。
+ */
+const uninvoicedRemoved = ref(null)
 
 const summary = reactive({
   hasData: false,
@@ -378,42 +398,111 @@ function matrixSummary({ columns }) {
   })
 }
 
-/**
- * 「当日回款明细」的表尾合计——只说一句「合计多少钱」。
- * 2026-10-14：原来这些信息（张数 / 合计 / 基准日期 / 口径）全堆在标题右侧，使用者圈掉说「这里的注释就不要了」，
- * 于是合计挪到表尾（与上面矩阵表同一个做法），其余交给页头的「对比基准」那条和表格本身的行数。
- * ⚠️ 用它而不是 el-table 自带的求和：金额列要**千分位 + 2 位小数**（跟全站一致），自带的会出裸数字。
- */
-/**
- * 底部当日明细的分组：新增在上、回款在下（与「本期变动」块的分组顺序一致）。
- *
- * 模板里只写一个 `v-for`，分组的有无全在这里决定：
- *  · 切到未开票线 ⇒ `deltaDetail` 为 null ⇒ 返回空数组（两张都不渲染）
- *  · 某组 0 张 ⇒ 过滤掉，不留一张空表
- *
- * ⚠️ 2026-10-14 晚：**这两张表现在要进导出图**（使用者「导出的图片怎么没有回款的」——
- *    早上他选的是「不进导出图」，后来发现图上少了回款明细，改回来了）。
- *    所以这里**没有** `exporting` 那道过滤，卡片上也没挂 `no-export`。
- *    代价：导出图会随明细行数变高（当天 2 张表约 +400px 逻辑高度）。
- */
-const detailGroups = computed(() => {
-  const d = deltaDetail.value
-  if (!d) return []
-  return [
-    { key: 'added', title: '当日新增明细', rows: d.added },
-    { key: 'removed', title: '当日回款明细', rows: d.removed },
-  ].filter((g) => g.rows.length)
-})
+// 2026-10-17：「当日新增明细」不再逐条列（使用者「这个就归类到一起吧」）⇒ 改走 sumCards 的汇总卡。
+// 原来配套的 detailGroups / detailSummary 已一并删除。
+
+/** 账龄老→新排名（源表文本同档多种写法，用包含判断；与全站「账龄老→新」一致） */
+function agingRank(cat) {
+  const s = String(cat || '')
+  if (/以上/.test(s)) return 0
+  if (/3个月|三个月/.test(s)) return 1
+  if (/2个月|两个月/.test(s)) return 2
+  if (/1个月|一个月/.test(s)) return 3
+  if (/当月/.test(s)) return 4
+  return 9
+}
 
 /**
- * 当日明细的表尾合计 —— 直接按**表里的行**求和（不是取接口字段）。
- * 2026-10-14：原来「张数 / 合计 / 基准日期 / 口径」全堆在标题右侧，使用者圈掉说「这里的注释就不要了」，
- * 于是合计挪到表尾（与上面矩阵表同一做法）。标题旁不再挂任何说明。
- * ⚠️ 不能用 el-table 自带的求和：它出的是**裸数字**（45052.81），全站金额一律千分位 + 2 位小数。
+ * 按「业务员 + 客户（+ 账龄）」汇总成平铺表：业务员 | 客户 | [账龄] | 张数 | 金额（元）。
+ *
+ * 排序（2026-10-15 使用者：「主要业务员、次要客户」）：
+ *  ① 业务员之间 —— 按该业务员的**合计金额**倒序
+ *  ② 同一业务员内 —— 按客户**合计金额**倒序
+ *  ③ withAging 时同一客户内 —— 按账龄**老→新**
+ *  ④ 兜底 —— 名称（中文拼音序），保证顺序稳定
+ * 空输入 ⇒ 空数组（卡片不渲染）。金额统一 round2，避免浮点尾差。
+ *
+ * @param {Array} rows line-delta 行（salesperson / customer_name / amt / aging_category）
+ * @param {{withAging?: boolean}} [opts] 回款带账龄（同一客户可能跨多档）；未开票新增恒为「当月」故不带
  */
-function detailSummary({ columns, data }) {
-  const total = (data || []).reduce((a, r) => a + Number(r.amt || 0), 0)
-  return columns.map((col, i) => (i === 0 ? '合计' : i === columns.length - 1 ? num(round2(total)) : ''))
+function bySpCustomer(rows, opts = {}) {
+  const withAging = !!opts.withAging
+  const map = new Map()
+  for (const r of rows || []) {
+    const sp = (r.salesperson || '').trim() || '未指定'
+    const cu = (r.customer_name || '').trim() || '未知客户'
+    const ag = (r.aging_category || '').trim()
+    const k = JSON.stringify(withAging ? [sp, cu, ag] : [sp, cu])
+    const cur = map.get(k) || { salesperson: sp, customer_name: cu, aging_category: ag, count: 0, amt: 0 }
+    cur.count += 1
+    cur.amt += Number(r.amt || 0)
+    map.set(k, cur)
+  }
+  const spTotal = new Map()
+  const cuTotal = new Map()
+  for (const x of map.values()) {
+    spTotal.set(x.salesperson, (spTotal.get(x.salesperson) || 0) + x.amt)
+    const ck = JSON.stringify([x.salesperson, x.customer_name])
+    cuTotal.set(ck, (cuTotal.get(ck) || 0) + x.amt)
+  }
+  return [...map.values()]
+    .map((x) => ({ ...x, amt: round2(x.amt) }))
+    .sort((a, b) => {
+      const ds = spTotal.get(b.salesperson) - spTotal.get(a.salesperson)
+      if (Math.abs(ds) > 0.005) return ds > 0 ? 1 : -1
+      if (a.salesperson !== b.salesperson) return a.salesperson.localeCompare(b.salesperson, 'zh-Hans-CN')
+      const dc = cuTotal.get(JSON.stringify([b.salesperson, b.customer_name])) - cuTotal.get(JSON.stringify([a.salesperson, a.customer_name]))
+      if (Math.abs(dc) > 0.005) return dc > 0 ? 1 : -1
+      if (a.customer_name !== b.customer_name) return a.customer_name.localeCompare(b.customer_name, 'zh-Hans-CN')
+      if (withAging) {
+        const dr = agingRank(a.aging_category) - agingRank(b.aging_category)
+        if (dr !== 0) return dr
+      }
+      return b.amt - a.amt
+    })
+}
+
+/**
+ * 底部「业务员 | 客户 | 张数 | 金额」汇总卡片（2026-10-15 使用者：「回款也是按照业务员来展现」
+ * 「不是很理想按业务员来，次要是按照客户来」）。
+ *   · 未回款线 ⇒ 当日新增（真新增，当月档） + 当日回款（源表里消失 / 金额变小的单）
+ *   · 未开票线 ⇒ 当日新增的未开票（真新增，当月档） + **当日已开票**（开票转去未回款线，2026-10-17 加）
+ * 2026-10-17 起：**四块全部走汇总**，逐条「当日新增明细」已取消（使用者「这个就归类到一起吧」）。
+ */
+const sumCards = computed(() => {
+  if (current.value === 'billed_unpaid') {
+    // 当日新增（真新增，恒当月档 ⇒ 不带账龄） + 当日回款（可能跨档 ⇒ 带账龄）
+    const addRows = bySpCustomer(deltaDetail.value?.added)
+    const payRows = bySpCustomer(deltaDetail.value?.removed, { withAging: true })
+    const cards = []
+    if (addRows.length) cards.push({ key: 'pay-add', title: '当日新增 · 按业务员 / 客户', rows: addRows, withAging: false })
+    if (payRows.length) cards.push({ key: 'pay', title: '当日回款 · 按业务员 / 客户', rows: payRows, withAging: true })
+    return cards
+  }
+  if (current.value === 'shipped_uninvoiced') {
+    // 当日新增的未开票：恒为「当月」档 ⇒ 不带账龄列
+    const addRows = bySpCustomer(uninvoicedAdded.value)
+    // 当日已开票：这一批离开未开票的单（开票转去未回款线），可能跨多档 ⇒ 带账龄列
+    const invRows = bySpCustomer(uninvoicedRemoved.value, { withAging: true })
+    const cards = []
+    if (addRows.length) cards.push({ key: 'uninv-add', title: '当日新增的未开票 · 按业务员 / 客户', rows: addRows, withAging: false })
+    if (invRows.length) cards.push({ key: 'uninv-inv', title: '当日已开票 · 按业务员 / 客户', rows: invRows, withAging: true })
+    return cards
+  }
+  return []
+})
+
+/** 汇总卡表尾合计：业务员列写「合计」，张数 / 金额 按列求和（用 col.property，不按列序猜） */
+function summaryByProp({ columns, data }) {
+  const rows = data || []
+  const count = rows.reduce((a, r) => a + Number(r.count || 0), 0)
+  const amt = rows.reduce((a, r) => a + Number(r.amt || 0), 0)
+  return columns.map((col, i) => {
+    if (i === 0) return '合计'
+    if (col.property === 'count') return String(count)
+    if (col.property === 'amt') return num(round2(amt))
+    return ''
+  })
 }
 
 // ------------------------------------------------------------
@@ -500,6 +589,8 @@ async function loadAll(silent) {
     // 切到未开票线时显式置 null ⇒ 两张表都不渲染（使用者 10-14：「开票的先不要」）。
     // 单独 try：这块挂了不该把上面四张卡一起拖黑。
     deltaDetail.value = null
+    uninvoicedAdded.value = null
+    uninvoicedRemoved.value = null
     if (current.value === 'billed_unpaid') {
       try {
         const d = await getLineDelta('billed_unpaid')
@@ -510,6 +601,15 @@ async function loadAll(silent) {
         }
       } catch (e) {
         console.error('[Home] 当日明细加载失败:', e)
+      }
+    } else if (current.value === 'shipped_uninvoiced') {
+      // 未开票线：只取真新增，用于按业务员汇总（不列单条）；单独 try，挂了不拖累上面四张卡
+      try {
+        const d = await getLineDelta('shipped_uninvoiced')
+        uninvoicedAdded.value = d?.added || []
+        uninvoicedRemoved.value = d?.removed || []
+      } catch (e) {
+        console.error('[Home] 未开票当日新增加载失败:', e)
       }
     }
   } catch (err) {
@@ -524,6 +624,8 @@ watch(current, () => {
   //    否则切到未开票线之后有几秒钟还挂着**上一条线**的单（串味）。
   //    与卡片上 `summary.prev = null` 是同一个道理：看着正常、其实是别的线的数据，最难发现。
   deltaDetail.value = null
+  uninvoicedAdded.value = null
+  uninvoicedRemoved.value = null
   loadAll()
 })
 onMounted(loadAll)

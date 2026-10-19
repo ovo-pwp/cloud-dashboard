@@ -18,7 +18,7 @@ import { existsSync } from 'node:fs'
 import { resolveExecutable } from './utils/executable.js'
 import path from 'path'
 
-import { pool } from './db/pool.js'
+import { pool, query } from './db/pool.js'
 import { todayDate } from './utils/date.js'
 import {
   importExcel,
@@ -259,6 +259,7 @@ async function tick() {
     return await runSyncTick()
   } finally {
     await dailyBackup()
+    await dailyCleanup()
   }
 }
 
@@ -274,6 +275,24 @@ async function dailyBackup() {
     }
   } catch (e) {
     errLog('数据库备份异常：' + e.message)
+  }
+}
+
+/**
+ * 每天清理一次登录日志（2026-10-17 加）。
+ * 原来 login_log 只增不删（9-20～10-17 已 897 条）；按 LOGIN_LOG_KEEP_DAYS（默认 180 天，最低 30）删旧记录。
+ * ⚠️ 与备份一样用 try 包住：清理失败绝不影响同步。
+ */
+async function dailyCleanup() {
+  try {
+    const days = Math.max(30, Number(process.env.LOGIN_LOG_KEEP_DAYS) || 180)
+    const { rowCount } = await query(
+      `DELETE FROM login_log WHERE created_at < NOW() - make_interval(days => $1)`,
+      [days]
+    )
+    if (rowCount) log(`已清理登录日志：${rowCount} 条（保留最近 ${days} 天）`)
+  } catch (e) {
+    errLog('登录日志清理失败：' + e.message)
   }
 }
 

@@ -1,10 +1,36 @@
 <template>
   <div class="login-wrap">
+    <!-- 左：品牌区（窄屏自动隐藏） -->
+    <aside class="brand-panel" aria-hidden="true">
+      <canvas ref="bgCanvas" class="brand-canvas"></canvas>
+      <span class="orb orb-a"></span>
+      <span class="orb orb-b"></span>
+      <div class="brand-inner">
+        <div class="brand-mark">云</div>
+        <h1 class="brand-name">云端看板</h1>
+        <p class="brand-tag">应收 / 开票 / 回款 · 一屏看清</p>
+        <ul class="brand-points">
+          <li><i></i>每日未回款 / 未开票汇总</li>
+          <li><i></i>业务员 × 账龄段矩阵</li>
+          <li><i></i>客户平台未回款对账</li>
+          <li><i></i>单号 / 客户全历史追溯</li>
+        </ul>
+        <div class="brand-foot">内部系统 · 数据仅供内部使用</div>
+      </div>
+    </aside>
+
+    <!-- 右：表单区 -->
+    <main class="form-panel">
     <div class="login-card">
-      <div class="brand">
-        <div class="logo">云</div>
-        <h1 class="title">云端看板</h1>
-        <p class="subtitle">应收 / 开票管理</p>
+      <div class="brand-mobile">
+        <div class="brand-mark">云</div>
+        <div class="brand-name">云端看板</div>
+        <div class="brand-tag">应收 / 开票 / 回款</div>
+      </div>
+
+      <div class="form-head">
+        <h2 class="form-title">登录</h2>
+        <p class="form-sub">请使用内部账号登录</p>
       </div>
 
       <el-alert
@@ -48,6 +74,22 @@
           />
         </el-form-item>
 
+        <el-form-item v-if="captcha.enabled" label="验证码" prop="captcha">
+          <div class="captcha-row">
+            <el-input
+              v-model="form.captcha"
+              placeholder="请输入计算结果"
+              size="large"
+              maxlength="4"
+              autocomplete="off"
+              @keyup.enter="onSubmit"
+            />
+            <button type="button" class="captcha-q" title="点一下换一题" @click="reloadCaptcha">
+              {{ captcha.question }}
+            </button>
+          </div>
+        </el-form-item>
+
         <div class="row-between">
           <el-checkbox v-model="form.remember" size="default">记住我</el-checkbox>
           <span class="remember-hint">保持登录 {{ REMEMBER_DAYS }} 天</span>
@@ -78,15 +120,16 @@
         本系统仅供内部使用，登录信息在 <code>.env</code> 中配置。
       </p>
     </div>
+    </main>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, nextTick } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
-import { login, setAuthToken, getMe, clearAuthToken } from '@/api'
+import { login, getMe, setAuthToken, clearAuthToken, getCaptcha } from '@/api'
 import { saveAccount } from '@/composables/savedAccounts'
 
 const router = useRouter()
@@ -97,6 +140,25 @@ const userRef = ref(null)
 const loading = ref(false)
 // 被限流时剩余的锁定分钟数；0 表示未被锁定
 const lockedUntil = ref(0)
+
+// 登录验证码：题面由服务端出，答案不下发。
+// 本机回环按配置可能返回 enabled:false（验证脚本免打扰）⇒ 此时不显示这一项。
+const captcha = reactive({ enabled: false, token: '', question: '' })
+
+async function reloadCaptcha() {
+  try {
+    const c = await getCaptcha()
+    captcha.enabled = !!c?.enabled
+    captcha.token = c?.token || ''
+    captcha.question = c?.question || ''
+  } catch {
+    captcha.enabled = false
+    captcha.token = ''
+    captcha.question = ''
+  }
+}
+
+onMounted(() => reloadCaptcha())
 
 // 顶栏「切换账号」跳过来时带 ?switch=1：预填上一个用户名、光标落在密码框
 const switching = route.query.switch === '1'
@@ -130,12 +192,174 @@ const savedRemember = (() => {
   }
 })()
 
-const form = reactive({ username: switching ? readLastUser() : '', password: '', remember: savedRemember })
+const form = reactive({ username: switching ? readLastUser() : '', password: '', remember: savedRemember, captcha: '' })
 
 const rules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
 }
+
+// ------------------------------------------------------------
+// 左侧品牌区的「流星」背景（2026-10-19：使用者「改成流星的感觉」）
+//   几颗流星拖着渐隐的尾巴从右上划向左下，背后撒一层很淡、缓慢明灭的星点。
+//   纯装饰：aria-hidden、尊重 prefers-reduced-motion、切后台停帧、尺寸为 0 时不画。
+// ------------------------------------------------------------
+const bgCanvas = ref(null)
+let pRaf = 0
+let pStop = null
+
+const METEOR_MAX = 5 // 同屏最多几颗流星
+const METEOR_TRAIL = [70, 160] // 尾巴长度范围（px）
+const METEOR_SPEED = [2.2, 4.4] // 每帧位移（px）
+const STAR_COUNT = 26 // 背景星点数
+
+const rnd = (a, b) => a + Math.random() * (b - a)
+
+function startParticles() {
+  const cv = bgCanvas.value
+  if (!cv) return
+  const ctx = cv.getContext('2d')
+  if (!ctx) return
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  let w = 0
+  let h = 0
+  const meteors = []
+  let stars = []
+
+  /** 造一颗流星：从右上方进入、往左下方划（18~40 度） */
+  function makeMeteor(initial) {
+    const ang = (18 + Math.random() * 22) * (Math.PI / 180)
+    const sp = rnd(METEOR_SPEED[0], METEOR_SPEED[1])
+    return {
+      // 初始的随机铺在画面里；后续的从右上方「画外」飞入
+      x: initial ? rnd(0, w * 1.15) : w + rnd(20, w * 0.4),
+      y: initial ? rnd(0, h) : -rnd(10, h * 0.35),
+      vx: -Math.cos(ang) * sp,
+      vy: Math.sin(ang) * sp,
+      len: rnd(METEOR_TRAIL[0], METEOR_TRAIL[1]),
+      alpha: rnd(0.5, 0.9),
+      r: rnd(1.1, 1.9),
+      wait: initial ? Math.floor(rnd(0, 90)) : Math.floor(rnd(35, 190)),
+    }
+  }
+
+  function resize() {
+    const rect = cv.getBoundingClientRect()
+    w = rect.width
+    h = rect.height
+    cv.width = Math.max(1, Math.round(w * dpr))
+    cv.height = Math.max(1, Math.round(h * dpr))
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    if (!w || !h) {
+      meteors.length = 0
+      stars = []
+      return
+    }
+
+    stars = Array.from({ length: STAR_COUNT }, () => ({
+      x: Math.random() * w,
+      y: Math.random() * h,
+      r: rnd(0.5, 1.3),
+      tw: rnd(0.4, 1.4), // 闪烁频率
+      ph: rnd(0, Math.PI * 2),
+    }))
+
+    meteors.length = 0
+    for (let i = 0; i < METEOR_MAX; i++) meteors.push(makeMeteor(true))
+  }
+
+  function draw(now) {
+    // 品牌区在窄屏是 display:none ⇒ 尺寸 0，别空转画布
+    if (!w || !h) {
+      pRaf = requestAnimationFrame(draw)
+      return
+    }
+    const t = (now || 0) / 1000
+    ctx.clearRect(0, 0, w, h)
+
+    // 1) 背景星点：很淡，缓慢明灭
+    for (const s of stars) {
+      const a = 0.1 + 0.28 * (0.5 + 0.5 * Math.sin(t * s.tw + s.ph))
+      ctx.fillStyle = `rgba(205, 228, 255, ${a.toFixed(3)})`
+      ctx.beginPath()
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    // 2) 流星：头亮、尾巴渐隐
+    for (const m of meteors) {
+      if (m.wait > 0) {
+        m.wait--
+        continue
+      }
+      m.x += m.vx
+      m.y += m.vy
+
+      const sp = Math.hypot(m.vx, m.vy) || 1
+      const tx = m.x - (m.vx / sp) * m.len
+      const ty = m.y - (m.vy / sp) * m.len
+
+      const g = ctx.createLinearGradient(m.x, m.y, tx, ty)
+      g.addColorStop(0, `rgba(226, 242, 255, ${m.alpha.toFixed(3)})`)
+      g.addColorStop(0.35, `rgba(150, 205, 255, ${(m.alpha * 0.42).toFixed(3)})`)
+      g.addColorStop(1, 'rgba(150, 205, 255, 0)')
+
+      ctx.strokeStyle = g
+      ctx.lineWidth = m.r
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.moveTo(m.x, m.y)
+      ctx.lineTo(tx, ty)
+      ctx.stroke()
+
+      // 头部小光点
+      ctx.fillStyle = `rgba(240, 250, 255, ${m.alpha.toFixed(3)})`
+      ctx.beginPath()
+      ctx.arc(m.x, m.y, m.r * 1.05, 0, Math.PI * 2)
+      ctx.fill()
+
+      // 划出画面 ⇒ 回收，隔一会儿再从右上重来
+      if (m.x < -m.len * 1.2 || m.y > h + m.len * 1.2) {
+        Object.assign(m, makeMeteor(false))
+      }
+    }
+
+    pRaf = requestAnimationFrame(draw)
+  }
+
+  resize()
+  pRaf = requestAnimationFrame(draw)
+
+  const ro = new ResizeObserver(() => resize())
+  ro.observe(cv)
+
+  function onVis() {
+    if (document.hidden) {
+      cancelAnimationFrame(pRaf)
+      pRaf = 0
+    } else if (!pRaf) {
+      pRaf = requestAnimationFrame(draw)
+    }
+  }
+  document.addEventListener('visibilitychange', onVis)
+
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    cancelAnimationFrame(pRaf)
+    pRaf = 0
+  }
+
+  pStop = () => {
+    ro.disconnect()
+    document.removeEventListener('visibilitychange', onVis)
+  }
+}
+
+onMounted(() => startParticles())
+onBeforeUnmount(() => {
+  if (pRaf) cancelAnimationFrame(pRaf)
+  if (pStop) pStop()
+})
 
 onMounted(async () => {
   // 已登录则直接进入目标页，无需重复登录
@@ -166,6 +390,11 @@ async function onSubmit() {
     return
   }
 
+  if (captcha.enabled && !String(form.captcha || '').trim()) {
+    ElMessage.warning('请输入验证码')
+    return
+  }
+
   loading.value = true
   // 每次尝试都重新以服务端返回为准（服务端才是限流的唯一权威）
   lockedUntil.value = 0
@@ -177,7 +406,7 @@ async function onSubmit() {
       /* 隐私模式忽略 */
     }
 
-    const r = await login(form.username, form.password, form.remember)
+    const r = await login(form.username, form.password, form.remember, captcha.enabled ? { token: captcha.token, answer: form.captcha } : null)
     if (!r.token) {
       // 后端未启用登录保护
       clearAuthToken()
@@ -199,6 +428,14 @@ async function onSubmit() {
   } catch (err) {
     const data = err?.response?.data
     const status = err?.response?.status
+
+    // 验证码不对 / 过期：换一题让用户重填
+    if (data?.code === 'CAPTCHA_INVALID') {
+      ElMessage.error(data?.error || '验证码不对，请重新输入')
+      form.captcha = ''
+      reloadCaptcha()
+      return
+    }
 
     // 被限流：明确告知还要等多久
     if (status === 429 || data?.code === 'TOO_MANY_ATTEMPTS') {
@@ -227,42 +464,146 @@ async function onSubmit() {
 .login-wrap {
   min-height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #2c3e50 0%, #34495e 55%, #3d566e 100%);
-  padding: 20px;
-  box-sizing: border-box;
-}
-
-.login-card {
-  width: 100%;
-  max-width: 400px;
   background: #fff;
-  border-radius: 10px;
-  padding: 40px 36px 28px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
 }
 
-.brand { text-align: center; margin-bottom: 28px; }
-
-.logo {
-  width: 56px;
-  height: 56px;
-  margin: 0 auto 14px;
-  border-radius: 14px;
-  background: #2c3e50;
-  color: #fff;
-  font-size: 26px;
-  font-weight: 700;
+/* ---------- 左侧品牌区 ---------- */
+.brand-panel {
+  position: relative;
+  flex: 0 0 46%;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 56px 48px;
+  background: linear-gradient(150deg, #1d2b3a 0%, #2c3e50 48%, #3d566e 100%);
+  color: #fff;
+}
+.brand-inner { position: relative; z-index: 2; width: 100%; max-width: 360px; }
+
+.brand-mark {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  margin-bottom: 22px;
+}
+.brand-name { font-size: 30px; font-weight: 700; letter-spacing: 6px; margin: 0 0 10px; color: #fff; }
+.brand-tag { font-size: 14px; letter-spacing: 1px; color: rgba(255, 255, 255, 0.68); margin: 0 0 34px; }
+
+.brand-points { list-style: none; margin: 0; padding: 0; }
+.brand-points li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  color: rgba(255, 255, 255, 0.8);
+  padding: 7px 0;
+}
+.brand-points li i {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: #7fb3d5;
+  transform: rotate(45deg);
+  box-shadow: 0 0 8px rgba(127, 179, 213, 0.8);
+  flex: 0 0 auto;
 }
 
-.title { font-size: 22px; margin: 0 0 6px; color: #2c3e50; letter-spacing: 2px; }
-.subtitle { font-size: 13px; color: #909399; margin: 0; letter-spacing: 1px; }
+.brand-foot {
+  margin-top: 40px;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: rgba(255, 255, 255, 0.38);
+}
+
+/* 流星画布：铺满品牌区，压在柔光之上、文字之下 */
+.brand-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* 纯 CSS 装饰：两团柔光 + 缓慢漂移（不引任何依赖） */
+.orb { position: absolute; z-index: 0; border-radius: 50%; filter: blur(60px); pointer-events: none; }
+.orb-a {
+  width: 360px; height: 360px; right: -110px; top: -90px;
+  background: radial-gradient(circle, rgba(93, 173, 226, 0.55), transparent 70%);
+  animation: floatA 14s ease-in-out infinite;
+}
+.orb-b {
+  width: 300px; height: 300px; left: -80px; bottom: -90px;
+  background: radial-gradient(circle, rgba(38, 198, 218, 0.35), transparent 70%);
+  animation: floatB 18s ease-in-out infinite;
+}
+@keyframes floatA {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(-18px, 22px, 0); }
+}
+@keyframes floatB {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(16px, -18px, 0); }
+}
+
+/* ---------- 右侧表单区 ---------- */
+.form-panel {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  background: #fff;
+}
+.login-card { width: 100%; max-width: 380px; }
+
+.form-head { margin-bottom: 22px; }
+.form-title { font-size: 24px; font-weight: 700; color: #2c3e50; margin: 0 0 6px; letter-spacing: 1px; }
+.form-sub { font-size: 13px; color: #909399; margin: 0; }
+
+/* 窄屏时才出现的品牌头 */
+.brand-mobile { display: none; text-align: center; margin-bottom: 24px; }
+.brand-mobile .brand-mark {
+  width: 54px; height: 54px; font-size: 26px;
+  margin: 0 auto 12px;
+  background: #2c3e50; border: none; color: #fff;
+}
+.brand-mobile .brand-name { font-size: 20px; letter-spacing: 3px; color: #2c3e50; margin: 0 0 4px; }
+.brand-mobile .brand-tag { font-size: 12px; color: #909399; margin: 0; }
 
 .submit { width: 100%; margin-top: 4px; letter-spacing: 4px; }
+
+/* 验证码：左边输入、右边题面（点一下换一题） */
+.captcha-row { display: flex; gap: 10px; width: 100%; }
+.captcha-row .el-input { flex: 1; }
+.captcha-q {
+  flex: 0 0 auto;
+  min-width: 116px;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px dashed #c0c4cc;
+  border-radius: 8px;
+  background: #f7f9fb;
+  color: #2c3e50;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  user-select: none;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  transition: border-color 0.15s, background 0.15s;
+}
+.captcha-q:hover { border-color: #7fb3d5; background: #eef4f9; }
 
 .row-between {
   display: flex;
@@ -292,4 +633,24 @@ async function onSubmit() {
 .tip code { background: #f5f7fa; padding: 1px 5px; border-radius: 3px; color: #909399; }
 
 :deep(.el-form-item__label) { font-weight: 500; }
+
+/* ---------- 窄屏：收起品牌区，表单变成白卡居中 ---------- */
+@media (max-width: 900px) {
+  .login-wrap { background: linear-gradient(150deg, #1d2b3a 0%, #2c3e50 48%, #3d566e 100%); }
+  .brand-panel { display: none; }
+  .form-panel { background: transparent; }
+  .login-card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 34px 26px 26px;
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.28);
+  }
+  .brand-mobile { display: block; }
+  .form-head { text-align: center; }
+}
+
+/* 尊重系统「减少动态效果」设置 */
+@media (prefers-reduced-motion: reduce) {
+  .orb-a, .orb-b { animation: none; }
+}
 </style>

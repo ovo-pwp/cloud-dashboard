@@ -79,7 +79,8 @@ try {
 // （具体实现在 routes/receivable.js 的 /login、/logout、/me）
 
 // 除放行清单外，整个 /api 都需要登录
-const PUBLIC_PATHS = new Set(['/login', '/logout', '/me', '/health'])
+// ⚠️ 新增「登录前就要用」的接口必须加到这里（如 2026-10-19 的 /captcha），否则会被鉴权先拦成 401
+const PUBLIC_PATHS = new Set(['/login', '/logout', '/me', '/health', '/captcha'])
 app.use('/api', (req, res, next) => {
   if (PUBLIC_PATHS.has(req.path)) return next()
   return requireLogin(req, res, next)

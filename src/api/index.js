@@ -30,9 +30,19 @@ export function clearAuthToken() {
   setAuthToken('')
 }
 
-/** 登录：用户名 + 密码 → 令牌；remember=true 时用更长的有效期 */
-export function login(username, password, remember = false) {
-  return request.post('/login', { username, password, remember: !!remember })
+/** 登录：用户名 + 密码 (+ 验证码) → 令牌；remember=true 时用更长的有效期 */
+export function login(username, password, remember = false, captcha = null) {
+  const body = { username, password, remember: !!remember }
+  if (captcha) {
+    body.captchaToken = captcha.token || ''
+    body.captchaAnswer = captcha.answer || ''
+  }
+  return request.post('/login', body)
+}
+
+/** 取一道登录验证码（算术题）；本机回环按配置会返回 enabled:false */
+export function getCaptcha() {
+  return request.get('/captcha')
 }
 
 /** 查当前登录状态 */
@@ -103,9 +113,9 @@ export function getDetail(bizType, params = {}) {
   return request.get('/detail', { params: { bizType, ...params } })
 }
 
-/** 修改某条明细的备注（追款情况） */
-export function updateDetailNote(id, note) {
-  return request.put('/detail/note', { id, note })
+/** 修改某条单据的进度反馈。按「单据号」一份、存独立表，与源表导入解耦 */
+export function updateDetailNote(bizType, docNo, note) {
+  return request.put('/detail/note', { bizType, docNo, note })
 }
 
 /** 修改某条明细的人工提醒（与系统自动的 data_warning 是两个字段） */

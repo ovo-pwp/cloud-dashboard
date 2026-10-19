@@ -15,39 +15,39 @@
   <div class="container">
     <PageHeader
       title="单号追溯"
-      sub="输入单据编号，看它从出现到消失的全过程 —— 跨全部历史批次，两条业务线都查"
+      sub="输入客户名称（或单号）：查该客户名下的单据 / 看某单号从出现到消失的全过程 —— 跨全部历史批次，两条业务线都查"
     />
 
     <div class="trace-bar">
       <el-input
         v-model="docNo"
-        placeholder="输入单据编号，如 2026-550 / ZX-26-1085"
+        placeholder="输入客户名称或单据编号，如 农行区分行私银部陈诚"
         clearable
-        style="max-width: 360px"
+        style="max-width: 440px"
         @keyup.enter="run"
         @clear="reset"
       />
       <el-button type="primary" :loading="loading" @click="run">查询</el-button>
-      <span class="trace-tip">记不全可以只输一部分，会给出候选</span>
+      <span class="trace-tip">客户名 / 单号记不全可以只输一部分，会给出候选</span>
     </div>
 
     <!-- 还没查 -->
-    <el-empty v-if="!queried" description="输入单据编号后点「查询」" :image-size="80" />
+    <el-empty v-if="!queried" description="输入客户名称或单据编号后点「查询」" :image-size="80" />
 
     <!-- 查不到 -->
     <el-empty v-else-if="res.match === 'none'" :image-size="80">
       <template #description>
-        <div>没查到「<b>{{ res.query }}</b>」这个单据编号</div>
-        <div class="trace-sub">可能原因：单号写错了，或这张单在源表里也从来没出现过</div>
+        <div>没查到「<b>{{ res.query }}</b>」相关的客户或单号</div>
+        <div class="trace-sub">可能原因：客户名 / 单号写错了，或这张单在源表里也从来没出现过</div>
       </template>
     </el-empty>
 
     <!-- 模糊命中：给候选 -->
     <div v-else-if="res.match === 'fuzzy'" class="trace-block">
       <div class="trace-hint">
-        没有精确匹配「<b>{{ res.query }}</b>」的单号。下面是<b>包含</b>这几个字的候选
+        没有精确匹配「<b>{{ res.query }}</b>」的单号。下面是<b>单号或挂账客户</b>包含这几个字的候选
         （共 {{ res.candidatesTotal }} 个<template v-if="res.candidatesTruncated">，只显示最近 {{ res.candidates.length }} 个</template>），
-        点一行即可查询：
+        点一行查看该单的时间线：
       </div>
       <el-table
         :data="res.candidates"
@@ -172,7 +172,7 @@ const cls = (n) => (Number(n || 0) > 0 ? 'red' : Number(n || 0) < 0 ? 'green' : 
 async function query(kw) {
   const q = String(kw ?? '').trim()
   if (!q) {
-    ElMessage.warning('请先输入单据编号')
+    ElMessage.warning('请先输入客户名称或单据编号')
     return
   }
   loading.value = true

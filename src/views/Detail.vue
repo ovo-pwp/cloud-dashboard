@@ -143,10 +143,16 @@
       </el-table-column>
       <el-table-column prop="customer" label="挂账客户" min-width="190" show-overflow-tooltip />
       <el-table-column prop="salesperson" label="业务员" width="100" align="center" />
-      <!-- 城市只有「已开票未回款」的源表有，未开票不显示这列，免得整列都是空的 -->
-      <el-table-column v-if="hasCity" prop="city" label="城市" width="90" align="center">
+      <!-- 地区（=源表「地址」归一化到市）只有「已开票未回款」的源表有，未开票不显示这列，免得整列都是空的 -->
+      <el-table-column v-if="hasCity" prop="city" label="地区" width="90" align="center">
         <template #default="{ row }">
           <span :class="{ 'date-missing': !row.city }">{{ row.city || '—' }}</span>
+        </template>
+      </el-table-column>
+      <!-- 行系（工行/中行/建行…）与地区相反：只有「已发货未开票」的源表有 -->
+      <el-table-column v-if="hasRowSystem" prop="rowSystem" label="行系" width="110" align="center">
+        <template #default="{ row }">
+          <span :class="{ 'date-missing': !row.rowSystem }">{{ row.rowSystem || '—' }}</span>
         </template>
       </el-table-column>
       <el-table-column prop="amountTotal" label="金额(元)" width="150" align="right" sortable="custom">
@@ -183,9 +189,9 @@
           </span>
         </template>
       </el-table-column>
-      <el-table-column prop="note" label="备注" min-width="150" show-overflow-tooltip>
+      <el-table-column prop="note" label="进度反馈" min-width="150" show-overflow-tooltip>
         <template #default="{ row }">
-          <!-- 管理员与成员都能点备注进入编辑 -->
+          <!-- 管理员与成员都能点进入编辑 -->
           <el-input
             v-if="canEditDetail && editingId === row.id"
             ref="noteInputs"
@@ -193,7 +199,7 @@
             type="textarea"
             :rows="1"
             :autosize="{ minRows: 1, maxRows: 4 }"
-            placeholder="填写备注（Enter 保存，Esc 取消）"
+            placeholder="填写进度反馈（Enter 保存，Esc 取消）"
             @blur="saveNote(row)"
             @keydown.enter.prevent="saveNote(row)"
             @keydown.esc.stop="cancelNote(row)"
@@ -202,7 +208,7 @@
             <span
               class="note"
               :class="{ 'note-editable': canEditDetail }"
-              :title="canEditDetail ? '点击修改备注' : ''"
+              :title="canEditDetail ? '点击修改进度反馈' : ''"
               @click="startEdit(row)"
             >
               {{ row.note || '—' }}
@@ -280,10 +286,13 @@ const filterOptions = reactive({
   customers: [],
   agingCategories: [],
   cities: [],
+  rowSystems: [],
 })
 
 // 城市列只有「已开票未回款」有数据；未开票不显示这一列与筛选项
 const hasCity = computed(() => (filterOptions.cities || []).length > 0)
+// 行系同理：只有「已发货未开票」源表有这列，那条线才有值，否则整列是空就不显示
+const hasRowSystem = computed(() => (filterOptions.rowSystems || []).length > 0)
 
 function fmt(v) {
   return Number(v || 0).toLocaleString('en-US', {
@@ -376,9 +385,9 @@ async function saveNote(row) {
   editValue.value = ''
   if (value === original) return
   try {
-    await updateDetailNote(row.id, value)
+    await updateDetailNote(current.value, row.docNo, value)
     row.note = value || null
-    ElMessage.success('备注已保存')
+    ElMessage.success('进度反馈已保存')
   } catch (err) {
     row.note = original
     console.error('[Detail] 保存备注失败:', err)

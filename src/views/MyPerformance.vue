@@ -60,7 +60,7 @@
     <el-radio-group v-model="currentBiz" class="biz-switch" size="default" @change="onBizChange">
       <el-radio-button value="billed_unpaid">已开票未回款</el-radio-button>
       <el-radio-button value="shipped_uninvoiced">已发货未开票</el-radio-button>
-      <el-radio-button value="customer_platform">客户平台未回款</el-radio-button>
+      <el-radio-button value="customer_platform">客户未回款到平台</el-radio-button>
     </el-radio-group>
 
     <!-- ====== 空状态 ====== -->
@@ -74,7 +74,7 @@
     <el-empty v-else-if="!loading && !hasAnyData" :description="`${selectedSalesperson} 在当前类型下没有未回款记录`">
       <div class="empty-tip">
         <p>可能的原因：这位业务员不负责「{{ bizLabel }}」这条业务线，或数据尚未同步。</p>
-        <p class="muted">试试切换到其他业务类型；如果是同一个人，一般都能在客户平台未回款里查到。</p>
+        <p class="muted">试试切换到其他业务类型；如果是同一个人，一般都能在客户未回款到平台里查到。</p>
       </div>
     </el-empty>
 
@@ -126,7 +126,7 @@
     <el-row :gutter="16" class="cards" v-if="currentBiz === 'customer_platform' && cpSummary.total > 0">
       <el-col :xs="12" :sm="12" :md="6">
         <div class="card">
-          <div class="card-label">客户平台未回款（元）</div>
+          <div class="card-label">客户未回款到平台（元）</div>
           <div class="card-value amount">{{ fmt(cpSummary.total) }}</div>
           <div class="card-sub">{{ cpSummary.snapshotDate || '暂无数据' }}</div>
         </div>
@@ -212,9 +212,17 @@
              原来「单据编号」富余 44px、「备注」富余一大截，而「客户名称」只有 180px、
              实际最长要 239px（如「招行宁波分行-信用卡部周黎俊」）⇒ 客户名被截断。
              把富余的宽度让给客户名称，让它能完整显示。 -->
-        <el-table-column prop="docDate" label="日期" width="114" align="center" />
+        <el-table-column prop="docDate" :label="dateLabel" width="114" align="center" />
         <el-table-column prop="docNo" label="单据编号" min-width="115" show-overflow-tooltip />
         <el-table-column prop="customer" label="客户名称" min-width="240" show-overflow-tooltip />
+        <!-- 地区/行系：两张源表各只有一列有数据（地区=已开票线的「地址」归一化、行系=已发货线独有），
+             跟业务线决定显示哪列，否则另一条线上会摆一整列「—」 -->
+        <el-table-column v-if="currentBiz !== 'shipped_uninvoiced'" prop="city" label="地区" width="100" align="center">
+          <template #default="{ row }"><span :class="{ 'date-missing': !row.city }">{{ row.city || '—' }}</span></template>
+        </el-table-column>
+        <el-table-column v-if="currentBiz === 'shipped_uninvoiced'" prop="rowSystem" label="行系" width="110" align="center">
+          <template #default="{ row }"><span :class="{ 'date-missing': !row.rowSystem }">{{ row.rowSystem || '—' }}</span></template>
+        </el-table-column>
         <el-table-column prop="agingCategory" label="账龄" width="154" align="center">
           <template #default="{ row }">
             <el-tag :type="agingTagType(row.agingCategory)" effect="plain" size="small">{{ row.agingCategory || '未分类' }}</el-tag>
@@ -226,7 +234,33 @@
         <el-table-column prop="over3m" :label="`3个月以上${agingVerb}`" min-width="140" align="right">
           <template #default="{ row }"><span class="amount warning" v-if="row.over3m">{{ fmt(row.over3m) }}</span><span v-else>—</span></template>
         </el-table-column>
-        <el-table-column prop="note" label="备注" min-width="110" show-overflow-tooltip />
+        <!-- 进度反馈（2026-10-19 起改名为「进度反馈」，原「备注」）：与「明细查询」页同一套交互
+             —— 点一下即可填写，Enter 保存 / Esc 取消。空着时显示「点击填写」，让人知道这里能写。 -->
+        <el-table-column prop="note" label="进度反馈" min-width="150">
+          <template #default="{ row }">
+            <el-input
+              v-if="canEditDetail && editingId === row.id"
+              ref="noteInputs"
+              v-model="editValue"
+              type="textarea"
+              :rows="1"
+              :autosize="{ minRows: 1, maxRows: 4 }"
+              placeholder="填写进度反馈（Enter 保存，Esc 取消）"
+              @blur="saveNote(row)"
+              @keydown.enter.prevent="saveNote(row)"
+              @keydown.esc.stop="cancelNote(row)"
+            />
+            <span
+              v-else
+              class="note"
+              :class="{ 'note-editable': canEditDetail }"
+              :title="canEditDetail ? (row.note || '点击填写进度反馈') : ''"
+              @click="startEdit(row)"
+            >
+              {{ row.note || (canEditDetail ? '点击填写' : '—') }}
+            </span>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
@@ -261,10 +295,41 @@
         <el-table-column prop="orderNo" label="订单编号" min-width="200" show-overflow-tooltip />
         <el-table-column prop="platform" label="平台" width="120" align="center" show-overflow-tooltip />
         <el-table-column prop="customer" label="客户" min-width="200" show-overflow-tooltip />
+        <!-- 地区：客户平台源表没有「地址」列，改为从客户名解析（详见 importer.js parsePlatformCustomerCity） -->
+        <el-table-column prop="city" label="地区" width="100" align="center">
+          <template #default="{ row }"><span :class="{ 'date-missing': !row.city }">{{ row.city || '—' }}</span></template>
+        </el-table-column>
         <el-table-column prop="amountTotal" label="金额(元)" min-width="125" align="right">
           <template #default="{ row }"><span class="amount">{{ fmt(row.amountTotal) }}</span></template>
         </el-table-column>
         <el-table-column prop="qty" label="数量" width="80" align="right" />
+        <!-- 进度反馈：与上面「我的明细」同一套交互（点一下即可填写，Enter 保存 / Esc 取消）。
+             存在 detail_note，键 = ('customer_platform', 订单编号)。 -->
+        <el-table-column prop="note" label="进度反馈" min-width="150">
+          <template #default="{ row }">
+            <el-input
+              v-if="canEditDetail && cpEditingNo === row.orderNo"
+              ref="cpNoteInputs"
+              v-model="cpEditValue"
+              type="textarea"
+              :rows="1"
+              :autosize="{ minRows: 1, maxRows: 4 }"
+              placeholder="填写进度反馈（Enter 保存，Esc 取消）"
+              @blur="cpSaveNote(row)"
+              @keydown.enter.prevent="cpSaveNote(row)"
+              @keydown.esc.stop="cpCancelNote(row)"
+            />
+            <span
+              v-else
+              class="note"
+              :class="{ 'note-editable': canEditDetail }"
+              :title="canEditDetail ? (row.note || '点击填写进度反馈') : ''"
+              @click="cpStartEdit(row)"
+            >
+              {{ row.note || (canEditDetail ? '点击填写' : '—') }}
+            </span>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
   </div>
@@ -277,7 +342,7 @@ import { Picture, Download, Filter } from '@element-plus/icons-vue'
 import { toPng } from 'html-to-image'
 import { captureWithFullWidth } from '@/utils/exportSize'
 import request from '@/api/request'
-import { exportDetail, exportCustomerPlatformDetail } from '@/api'
+import { exportDetail, exportCustomerPlatformDetail, updateDetailNote } from '@/api'
 import { loadAuth, useAuth } from '@/composables/useAuth'
 import PageHeader from '@/components/PageHeader.vue'
 // 与其它看板页保持一致：30 秒静默刷新（这页以前漏了，只有它不自动更新）
@@ -285,7 +350,8 @@ import { useAutoRefresh } from '@/composables/useAutoRefresh'
 
 // 导出权限：与「明细查询」页用同一套判断（管理员与成员都能导，
 // 将来若要收紧，改 useAuth 里的 CAN_EXPORT 即可，这里不用动）
-const { canExport } = useAuth()
+// canEditDetail 管「备注能填不能填」—— 与导出刻意分开，将来要「能导不能改」只改 useAuth
+const { canExport, canEditDetail } = useAuth()
 
 const pageRef = ref(null)
 const exportingImg = ref(false)
@@ -369,7 +435,7 @@ const hasAnyData = computed(() =>
 const BIZ_LABELS = {
   billed_unpaid: '已开票未回款',
   shipped_uninvoiced: '已发货未开票',
-  customer_platform: '客户平台未回款',
+  customer_platform: '客户未回款到平台',
 }
 const bizLabel = computed(() => BIZ_LABELS[currentBiz.value] || '')
 
@@ -381,6 +447,15 @@ const bizLabel = computed(() => BIZ_LABELS[currentBiz.value] || '')
  * 所以标签必须跟着业务线变：两条销售线各自的「金额」与「3个月以上」口径都不一样。
  */
 const agingVerb = computed(() => (currentBiz.value === 'shipped_uninvoiced' ? '未开票' : '未回款'))
+
+/**
+ * 明细「日期」列的列名也要跟业务线走（2026-10-19 使用者指定）：
+ *   已开票未回款 → 开票日期（源表字段就是「开票日期」）
+ *   已发货未开票 → 发货日期
+ * 原来统一写「日期」，业务员看不出这日期指哪一天，两条线含义也不一样。
+ * 客户平台的订单明细表用的是「下单日期」列，不走这里。
+ */
+const dateLabel = computed(() => (currentBiz.value === 'shipped_uninvoiced' ? '发货日期' : '开票日期'))
 
 /** 较上期：涨了用红（与全站金额语义色一致），跌了用绿 */
 const cpDeltaAmount = computed(() => Number(cpSummary.value.deltaAmount ?? 0))
@@ -446,6 +521,100 @@ function agingTagType(category) {
   if (c.includes('一个月')) return 'primary'
   if (c === '未分类') return 'info'
   return 'success'
+}
+
+// ========== 备注（跟进情况）行内编辑 ==========
+// 与「明细查询」页完全同一套写法，两页行为保持一致。
+// 为什么放在这一页：业务员看自己的单，最需要顺手记一句「客户说下周付」，
+// 以前这列只能看不能写，等于没有。
+const editingId = ref(null)
+const editValue = ref('')
+/** 编辑框引用：同一时刻只有一行在编辑，ref 不在 v-for 里 ⇒ 拿到的是组件实例（不是数组） */
+const noteInputs = ref([])
+
+function focusEditor(r) {
+  const el = Array.isArray(r.value) ? r.value[0] : r.value
+  el?.focus?.()
+}
+
+/** 退出编辑态但不保存（切换业务员/业务线/客户、Esc 取消时用）
+ *  应收明细与客户平台明细是两套独立的编辑态（键不同：一个用 id、一个用订单编号），
+ *  但「换人/换线/换客户」这种场景要一起收掉，所以这个函数两套都清。
+ *  cpResetNoteEdit 是下面用 function 声明的（会提升），所以这里可以直接调。 */
+function resetNoteEdit() {
+  editingId.value = null
+  editValue.value = ''
+  cpResetNoteEdit()
+}
+
+function startEdit(row) {
+  if (!canEditDetail.value) return
+  editingId.value = row.id
+  editValue.value = row.note || ''
+  nextTick(() => focusEditor(noteInputs))
+}
+
+function cancelNote(row) {
+  if (editingId.value !== row.id) return
+  resetNoteEdit()
+}
+
+/** 保存：写库成功才改行上的值；失败回退原值（不留下「看着存了其实没存」的假象） */
+async function saveNote(row) {
+  if (editingId.value !== row.id) return
+  const value = editValue.value.trim()
+  const original = row.note || ''
+  resetNoteEdit()
+  if (value === original) return
+  try {
+    await updateDetailNote(currentBiz.value, row.docNo, value)
+    row.note = value || null
+    ElMessage.success('进度反馈已保存')
+  } catch (err) {
+    row.note = original
+    console.error('[我的业绩] 保存备注失败:', err)
+  }
+}
+
+// ========== 客户平台订单明细的进度反馈 ==========
+// 与上面同一套交互，但不能共用 editingId：应收明细的编辑键是 row.id（数字），
+// 客户平台这张表根本没返回 id（它按订单编号定位），两套键混用会互相把对方的编辑态顶掉。
+// 所以单独一组状态，键 = row.orderNo。
+const cpEditingNo = ref(null)
+const cpEditValue = ref('')
+const cpNoteInputs = ref([])
+
+function cpResetNoteEdit() {
+  cpEditingNo.value = null
+  cpEditValue.value = ''
+}
+
+function cpStartEdit(row) {
+  if (!canEditDetail.value) return
+  cpEditingNo.value = row.orderNo
+  cpEditValue.value = row.note || ''
+  nextTick(() => focusEditor(cpNoteInputs))
+}
+
+function cpCancelNote(row) {
+  if (cpEditingNo.value !== row.orderNo) return
+  cpResetNoteEdit()
+}
+
+async function cpSaveNote(row) {
+  if (cpEditingNo.value !== row.orderNo) return
+  const value = cpEditValue.value.trim()
+  const original = row.note || ''
+  cpResetNoteEdit()
+  if (value === original) return
+  try {
+    await updateDetailNote('customer_platform', row.orderNo, value)
+    row.note = value || null
+    ElMessage.success('进度反馈已保存')
+  } catch (err) {
+    row.note = original
+    console.error('[我的业绩] 保存客户平台进度反馈失败:', err)
+  }
 }
 
 // ========== 加载数据 ==========
@@ -592,6 +761,8 @@ async function loadCpDetail() {
 }
 
 async function loadData(silent) {
+  // 正在填备注时跳过后台静默刷新：30 秒一到把行整体换掉，输入到一半的内容会凭空消失
+  if (silent && (editingId.value !== null || cpEditingNo.value !== null)) return
   // 没选人就不用请求任何业务数据；直接放行，让空状态露出来。
   // （以前 loading 会一直挂着，遮罩盖住整页，空状态根本看不到）
   if (!selectedSalesperson.value) {
@@ -621,19 +792,22 @@ async function loadData(silent) {
 }
 
 function onSalespersonChange() {
-  // 换了人，上一位的客户选择对他没有意义
+  // 换了人，上一位的客户选择对他没有意义；备注编辑态也要收掉（行都换人了）
   selectedCustomer.value = ''
+  resetNoteEdit()
   loadData()
 }
 
 function onBizChange() {
   // 换了业务线，客户名单整套都变了
   selectedCustomer.value = ''
+  resetNoteEdit()
   loadData()
 }
 
 /** 客户筛选只影响明细表：上方 4 张卡是「我的」合计，不是某个客户的 */
 function onCustomerChange() {
+  resetNoteEdit()
   if (currentBiz.value === 'customer_platform') loadCpDetail()
   else loadDetail()
 }
@@ -823,8 +997,19 @@ useAutoRefresh(loadData)
 .amount { color: #f56c6c; font-weight: 600; }
 .amount.warning { color: #e6a23c; }
 
+/* 备注（跟进情况）：空着时是可点的浅色提示，填了之后变深；
+   悬停加下划线 + 主题蓝，让人一眼看出「这一格能写」——
+   与「明细查询」页同一套样式，两页观感一致。 */
+.note { color: #909399; font-size: 13px; }
+.note-editable { color: #409eff; cursor: pointer; }
+.note-editable:hover { text-decoration: underline; }
+/* 空值（如地区/行系没数据）灰显「—」，与「明细查询」页一致 */
+.date-missing { color: #c0c4cc; }
+
 /* 明细表：单元格一律不换行 —— 宽度不够就让表格横向滚动，而不是折行把行高搞乱 */
 :deep(.el-table .cell) { white-space: nowrap; }
+/* 但备注编辑框必须能换行：white-space 会继承下来，长句子会被压成一行、autosize 也量不准高度 */
+:deep(.el-textarea__inner) { white-space: pre-wrap; }
 
 /* 业务类型切换与表格的收尾规范 */
 .biz-switch { margin: 16px 0; }

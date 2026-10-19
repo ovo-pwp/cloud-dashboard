@@ -165,7 +165,7 @@ const entries = computed(() => {
     {
       name: '明细查询', path: '/detail', icon: Document, primary: true,
       color: 'linear-gradient(135deg,#36cfc9,#13a8a8)',
-      desc: '按业务员 / 客户 / 账龄筛选，可改备注、可导出 Excel',
+      desc: '按业务员 / 客户 / 账龄筛选，可改进度反馈、可导出 Excel',
     },
     {
       name: '客户平台未回款', path: '/customer-platform-unpaid', icon: Money,
@@ -239,7 +239,7 @@ const flow = [
 const tips = [
   '顶部<b>业务类型</b>切换决定「数据总览 / 明细查询 / 每日趋势」三页看的是哪条业务线',
   '金额一律<b>右对齐 + 千分位 + 2 位小数</b>；账龄列颜色固定 <b>红→橙→黄→蓝→绿（老→新）</b>',
-  '管理员与成员权限不同：<b>成员不能同步数据、进不了系统管理</b>，但可正常查数、改备注、导 Excel',
+  '管理员与成员权限不同：<b>成员不能同步数据、进不了系统管理</b>，但可正常查数、改进度反馈、导 Excel',
   '「数据总览」右上角<b>导出看板图片</b>可直接生成整页 PNG，发给领导用',
 ]
 

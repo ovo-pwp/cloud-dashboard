@@ -126,7 +126,7 @@
                   当前账号：{{ username }}（{{ roleText || '—' }}）
                 </el-dropdown-item>
                 <el-dropdown-item v-if="isMember" disabled>
-                  成员账号：可查看看板、导出 Excel 并改备注，不能同步 / 进系统管理
+                  成员账号：可查看看板、导出 Excel 并改进度反馈，不能同步 / 进系统管理
                 </el-dropdown-item>
                 <!-- 本机登录过的其他账号：点一下就切过去（免密，但不能提权） -->
                 <el-dropdown-item

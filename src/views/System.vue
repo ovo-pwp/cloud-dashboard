@@ -155,7 +155,7 @@
         <code>用户名=密码:角色</code> 配置（不写
         <code>:角色</code> 即管理员）：
         <b>管理员</b>（<code>admin</code>）能用全部功能；
-        <b>成员</b>（<code>member</code>）能看看板、能导出 Excel、能改明细的备注，
+        <b>成员</b>（<code>member</code>）能看看板、能导出 Excel、能改明细的进度反馈，
         但不能同步、也进不了本页。
         改角色后重启服务立即生效，不必等旧令牌过期。
       </p>
@@ -167,22 +167,42 @@
         size="small"
         :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
       >
-        <el-table-column prop="createdAt" label="时间" width="180" align="center" />
-        <el-table-column prop="username" label="账号" min-width="120" />
-        <el-table-column label="结果" width="110" align="center">
+        <el-table-column prop="createdAt" label="时间" width="170" align="center" />
+        <el-table-column prop="username" label="账号" min-width="100" />
+        <el-table-column label="角色" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag
+              v-if="roleOf(row.username) !== '—'"
+              size="small"
+              effect="plain"
+              :type="roleOf(row.username) === '管理员' ? 'warning' : 'info'"
+            >{{ roleOf(row.username) }}</el-tag>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="结果" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="row.success ? 'success' : 'danger'" effect="plain" size="small">
               {{ row.success ? '登录成功' : '登录失败' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="reason" label="备注" width="110" align="center">
+        <el-table-column prop="reason" label="备注" width="90" align="center">
           <template #default="{ row }">{{ row.reason || '—' }}</template>
         </el-table-column>
-        <el-table-column prop="ip" label="IP" min-width="140" align="center">
-          <template #default="{ row }">{{ row.ip || '—' }}</template>
+        <el-table-column prop="ip" label="IP" width="130" align="center">
+          <template #default="{ row }">
+            <span :title="row.ip || ''">{{ fmtIp(row.ip) }}</span>
+          </template>
         </el-table-column>
-        <el-table-column prop="userAgent" label="浏览器 / 设备" min-width="260" show-overflow-tooltip>
+        <el-table-column label="方式" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain" :type="loginMode(row.userAgent) === '脚本' ? 'info' : 'success'">
+              {{ loginMode(row.userAgent) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="userAgent" label="浏览器 / 设备" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">{{ shortUA(row.userAgent) }}</template>
         </el-table-column>
       </el-table>
@@ -366,6 +386,28 @@ function shortUA(ua) {
     return `${name}${m[2] ? ' ' + m[2].split('.')[0] : ''}`
   }
   return s.length > 40 ? s.slice(0, 40) + '…' : s
+}
+
+/** IP 友好化：本机回环 → 「本机」；IPv4-mapped（::ffff:1.2.3.4）去掉前缀 */
+function fmtIp(ip) {
+  const s = String(ip || '').trim()
+  if (!s) return '—'
+  if (s === '::1' || s === '127.0.0.1' || s === '::ffff:127.0.0.1') return '本机'
+  const m = s.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i)
+  return m ? m[1] : s
+}
+
+/** 登录方式：UA 里带脚本/命令行特征 → 「脚本」，其余 → 「浏览器」 */
+function loginMode(ua) {
+  const s = String(ua || '')
+  if (!s) return '—'
+  return /node|python|curl|wget|axios|postman|okhttp|go-http|java\//i.test(s) ? '脚本' : '浏览器'
+}
+
+/** 账号 → 当前配置的角色（已从 LOGIN_USERS 删掉的账号显示 —；这是「当前」角色，不追溯历史） */
+function roleOf(username) {
+  const hit = (logAccounts.value || []).find((a) => a && a.username === username)
+  return hit ? ROLE_LABEL[hit.role] || hit.role : '—'
 }
 
 async function loadLog(page) {
