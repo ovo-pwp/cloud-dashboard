@@ -126,7 +126,7 @@
       :summary-method="summaryMethod"
       @sort-change="onSortChange"
     >
-      <el-table-column prop="docNo" label="单据编号" width="125" align="center" fixed />
+      <el-table-column prop="docNo" :label="docNoLabel" width="135" align="center" fixed />
       <el-table-column prop="docDate" label="日期" width="110" align="center">
         <template #default="{ row }">
           <span :class="{ 'date-missing': !row.docDate }">
@@ -295,6 +295,17 @@ const filterOptions = reactive({
 const hasCity = computed(() => (filterOptions.cities || []).length > 0)
 // 行系同理：只有「已发货未开票」源表有这列，那条线才有值，否则整列是空就不显示
 const hasRowSystem = computed(() => (filterOptions.rowSystems || []).length > 0)
+
+/**
+ * 单号列名：按业务线走「利润系统」的叫法（2026-10-19 使用者确认）。
+ *   已发货未开票 → 合同执行编号
+ *   已开票未回款 → 报账方案编号
+ * 两条线取的是源表里不同的字段（importer.js BIZ_TYPES 的 nameField），
+ * 以前统一叫「单据编号」是看板自己的说法，跟利润系统对不上，跨系统核账时要来回翻译。
+ */
+const docNoLabel = computed(() =>
+  current.value === 'shipped_uninvoiced' ? '合同执行编号' : '报账方案编号'
+)
 
 function fmt(v) {
   return Number(v || 0).toLocaleString('en-US', {

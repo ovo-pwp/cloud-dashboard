@@ -21,7 +21,7 @@
     <div class="trace-bar">
       <el-input
         v-model="docNo"
-        placeholder="输入客户名称或单据编号，如 农行区分行私银部陈诚"
+        placeholder="输入客户名称或单据编号（合同执行编号 / 报账方案编号），如 农行区分行私银部陈诚"
         clearable
         style="max-width: 440px"
         @keyup.enter="run"
@@ -32,7 +32,7 @@
     </div>
 
     <!-- 还没查 -->
-    <el-empty v-if="!queried" description="输入客户名称或单据编号后点「查询」" :image-size="80" />
+    <el-empty v-if="!queried" description="输入客户名称或单据编号（合同执行编号 / 报账方案编号）后点「查询」" :image-size="80" />
 
     <!-- 查不到 -->
     <el-empty v-else-if="res.match === 'none'" :image-size="80">
@@ -57,6 +57,8 @@
         :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
         @row-click="onPick"
       >
+        <!-- 这一列跨两条业务线混排（候选表下面就有「业务线」列），
+             所以保留通用叫法「单据编号」，不按线改名，否则同一列里两种名字会互相打架 -->
         <el-table-column prop="docNo" label="单据编号" width="150" />
         <el-table-column prop="bizLabel" label="业务线" width="110" />
         <el-table-column prop="customerName" label="挂账客户" min-width="180" show-overflow-tooltip />

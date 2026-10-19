@@ -777,6 +777,17 @@ const DETAIL_EXPORT_COLUMNS = [
   { key: 'warning', label: '提醒' },
 ]
 
+/**
+ * 单号列名按业务线走「利润系统」的叫法（2026-10-19 使用者确认）：
+ *   已发货未开票 → 合同执行编号（源表 nameField = 合同执行编号）
+ *   已开票未回款 → 报账方案编号（源表 nameField = 开票方案编号，利润系统里叫报账方案）
+ * 导出表头必须与页面表头一致，否则导出来给人看时又要猜这一列是什么。
+ */
+function detailExportColumns(bizType) {
+  const label = bizType === 'shipped_uninvoiced' ? '合同执行编号' : '报账方案编号'
+  return DETAIL_EXPORT_COLUMNS.map((c) => (c.key === 'docNo' ? { ...c, label } : c))
+}
+
 /** 导出用的数据列 SQL（与 DETAIL_EXPORT_COLUMNS 对齐） */
 const DETAIL_EXPORT_SELECT = `
   d.doc_no                            AS "docNo",
@@ -1030,7 +1041,7 @@ router.get('/export/detail', requireRole(...CAN_EXPORT), async (req, res, next) 
     )
 
     const buffer = buildXlsx({
-      columns: DETAIL_EXPORT_COLUMNS,
+      columns: detailExportColumns(bizType),
       rows,
       sheetName: label.slice(0, 28),
     })
@@ -2197,8 +2208,10 @@ function escapeLike(s) {
 router.get('/trace', async (req, res, next) => {
   try {
     const raw = String(req.query.docNo ?? '').trim()
-    if (!raw) return res.status(400).json({ error: '请输入单据编号' })
-    if (raw.length > 60) return res.status(400).json({ error: '单据编号过长（最多 60 字）' })
+    // 追溯是「客户名第一入口」（2026-10-19 改），参数名还叫 docNo 是为了不动前端调用，
+    // 但提示语不能再只说「单据编号」，否则用户不知道可以填客户名。
+    if (!raw) return res.status(400).json({ error: '请输入客户名称或单据编号' })
+    if (raw.length > 60) return res.status(400).json({ error: '查询内容过长（最多 60 字）' })
 
     // 各业务线的当前最新批：用来判断「这单现在还在不在最新批里」
     const latest = {}

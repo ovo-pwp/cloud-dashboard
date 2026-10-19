@@ -199,9 +199,10 @@
         <!-- 列宽按内容实测值重排（2026-10-10）：
              原来「单据编号」富余 44px、「备注」富余一大截，而「客户名称」只有 180px、
              实际最长要 239px（如「招行宁波分行-信用卡部周黎俊」）⇒ 客户名被截断。
-             把富余的宽度让给客户名称，让它能完整显示。 -->
+             把富余的宽度让给客户名称，让它能完整显示。
+             2026-10-19：列名改为按业务线显示「合同执行编号 / 报账方案编号」，6 个字，宽度 125 → 135。 -->
         <el-table-column prop="docDate" :label="dateLabel" width="114" align="center" />
-        <el-table-column prop="docNo" label="单据编号" min-width="115" show-overflow-tooltip />
+        <el-table-column prop="docNo" :label="docNoLabel" min-width="135" show-overflow-tooltip />
         <el-table-column prop="customer" label="客户名称" min-width="240" show-overflow-tooltip />
         <!-- 地区/行系：两张源表各只有一列有数据（地区=已开票线的「地址」归一化、行系=已发货线独有），
              跟业务线决定显示哪列，否则另一条线上会摆一整列「—」 -->
@@ -442,6 +443,17 @@ const bizLabel = computed(() => BIZ_LABELS[currentBiz.value] || '')
  * 所以标签必须跟着业务线变：两条销售线各自的「金额」与「3个月以上」口径都不一样。
  */
 const agingVerb = computed(() => (currentBiz.value === 'shipped_uninvoiced' ? '未开票' : '未回款'))
+
+/**
+ * 单号列名：按业务线走「利润系统」的叫法（2026-10-19 使用者确认）。
+ *   已发货未开票 → 合同执行编号
+ *   已开票未回款 → 报账方案编号
+ * 客户平台那条线不在这里露面（它表里叫「订单编号」，是另一个字段），
+ * 所以这里只判已发货/已开票两种，兜底给「报账方案编号」。
+ */
+const docNoLabel = computed(() =>
+  currentBiz.value === 'shipped_uninvoiced' ? '合同执行编号' : '报账方案编号'
+)
 
 /**
  * 明细「日期」列的列名也要跟业务线走（2026-10-19 使用者指定）：
