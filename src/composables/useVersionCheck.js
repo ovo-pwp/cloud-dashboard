@@ -16,6 +16,11 @@ import { ref } from 'vue'
  *
  * 刻意**不自动刷新**：页面上可能有正在编辑的备注，替他刷新会丢东西。
  * 只提示、给一个按钮，由使用者决定何时点。
+ *
+ * 🔴 唯一例外：登录页（2026-10-21 使用者反馈「登不上去」）。
+ *   登录页上没有任何可丢的东西，而旧页面卡在登录的最典型表现就是
+ *   「输完账号密码点登录没反应 / 白屏」，这时让人去按 Ctrl+F5 是多余的门槛。
+ *   所以登录页检测到新版本就直接刷新；其余页面一律保持「只提示」。
  */
 const CHECK_MS = 5 * 60 * 1000
 /**
@@ -59,7 +64,34 @@ async function check() {
   if (now - lastCheckAt < MIN_GAP_MS) return
   lastCheckAt = now
   const live = await fetchLiveHash()
-  if (live && live !== bootHash) hasNewVersion.value = true
+  if (live && live !== bootHash) {
+    hasNewVersion.value = true
+    maybeAutoReloadOnLogin()
+  }
+}
+
+/**
+ * 登录页自动刷新（防循环）。
+ *
+ * 为什么要防循环：如果 CDN/代理还在返回旧的 index.html，刷新后拿到的仍是旧主包，
+ * 下次检查依旧「发现新版本」→ 无限刷新，用户会看到页面不停闪。
+ * 用 sessionStorage 记一次时间戳，60 秒内只允许自动刷一次；
+ * 超时后仍未解决就退回原来的「只提示」，把决定权交回给人。
+ */
+const AUTO_RELOAD_KEY = 'cloud-dashboard:auto-reload-at'
+
+function maybeAutoReloadOnLogin() {
+  // 只在登录页自动刷：这里没有未保存的输入，刷新零成本
+  if (!window.location.pathname.startsWith('/login')) return
+  try {
+    const last = Number(window.sessionStorage.getItem(AUTO_RELOAD_KEY) || 0)
+    if (Date.now() - last < 60 * 1000) return
+    window.sessionStorage.setItem(AUTO_RELOAD_KEY, String(Date.now()))
+  } catch {
+    // 隐私模式下 sessionStorage 可能不可用：宁可只提示，也别冒无限刷新的风险
+    return
+  }
+  reloadPage()
 }
 
 function onVisible() {
@@ -69,6 +101,8 @@ function onVisible() {
 /** 路由的 chunk 加载失败 → 基本可以断定是「旧页面 + 新发布」 */
 export function markStaleModule() {
   mustReload.value = true
+  // 登录页同样直接刷新：这里「必须刷新才能继续」，与其让人瞪着不动的页面，不如替他刷
+  maybeAutoReloadOnLogin()
 }
 
 export function reloadPage() {
