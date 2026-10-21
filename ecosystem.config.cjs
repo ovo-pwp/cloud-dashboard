@@ -44,5 +44,31 @@ module.exports = {
       out_file: 'logs/web-out.log',
       merge_logs: true,
     },
+    {
+      // 隧道看门狗（2026-10-21）。
+      // 起因：公网整站 502，但本地 127.0.0.1:3000 一直 200 —— 是 cloudflared 的隧道
+      // 静默断连（服务状态仍是 Running、进程还在，只是没有出网连接）。
+      // 这个进程每 5 分钟探一次公网 /api/health，连续 2 次不通且本地正常就重启隧道服务。
+      // ⚠️ 重启 Windows 服务需要管理员权限 ⇒ **PM2 必须以管理员身份启动**，
+      //    否则日志里会出现「重启失败：…拒绝访问」，届时只能人工处理。
+      name: 'tunnel-watchdog',
+      script: 'scripts/tunnel-watchdog.mjs',
+      cwd: 'C:/Users/Administrator/Desktop/cloud-dashboard',
+      exec_mode: 'fork',
+      instances: 1,
+      autorestart: true,
+      restart_delay: 5000,
+      max_memory_restart: '200M',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      error_file: 'logs/watchdog-error.log',
+      out_file: 'logs/watchdog-out.log',
+      merge_logs: true,
+      env: {
+        NODE_ENV: 'production',
+        TUNNEL_WATCH_INTERVAL_MIN: '5',
+        TUNNEL_WATCH_FAILS: '2',
+        TUNNEL_WATCH_MAX_PER_HOUR: '3',
+      },
+    },
   ]
 }
