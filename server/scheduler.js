@@ -14,7 +14,8 @@
  *   IMPORT_WATCH_FOLDER=C:/Users/.../应收看板-数据导出  # 导出目录
  */
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { resolveExecutable } from './utils/executable.js'
 import path from 'path'
 
@@ -78,6 +79,54 @@ const TABLE_SPECS = [
 ]
 
 // ------------------------------------------------------------
+// 报表降频（2026-10-21）
+//
+// 背景：同步从 5-7 秒涨到 17 秒，实测 95% 的时间都在等金山文档接口
+//   （12 次分页往返，每次约 1 秒），入库只占 0.58 秒。
+//   而「客户开票明细」「客户对账明细」这两张报表是按天出数的，
+//   每小时拉一次纯属浪费 —— 它们占了 5 次分页请求（约 6 秒）。
+//
+// 做法：主表（未回款/未开票/客户平台）每小时照常拉；
+//   两张报表每 REPORTS_REFRESH_HOURS 小时才拉一次，其余轮次连导入也一起跳过
+//   （不导旧文件，避免拿陈旧 xlsx 去全量替换，也省掉无谓的写库）。
+// ------------------------------------------------------------
+const REPORT_BIZ_TYPES = new Set([CUSTOMER_INVOICE_BIZ_TYPE, 'customer_recon'])
+const CORE_SPECS = TABLE_SPECS.filter((s) => !REPORT_BIZ_TYPES.has(s.bizType))
+const REPORT_SPECS = TABLE_SPECS.filter((s) => REPORT_BIZ_TYPES.has(s.bizType))
+
+/** 报表刷新间隔（小时），默认 6；想恢复每小时全量就把环境变量设成 1 */
+const REPORTS_REFRESH_HOURS = Math.max(1, Number(process.env.REPORTS_REFRESH_HOURS) || 6)
+const REPORTS_STATE_FILE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '.runtime',
+  'reports-pull.json'
+)
+
+/** 距上次拉报表是否已超过间隔（没有记录时返回 true = 该拉了） */
+function reportsDue() {
+  try {
+    const t = Number(JSON.parse(readFileSync(REPORTS_STATE_FILE, 'utf8')).lastAt || 0)
+    if (!t) return true
+    return Date.now() - t >= REPORTS_REFRESH_HOURS * 3600 * 1000
+  } catch {
+    return true
+  }
+}
+
+/** 记录本次拉报表的时间；写失败只记日志，绝不影响同步结果 */
+function markReportsPulled() {
+  try {
+    mkdirSync(path.dirname(REPORTS_STATE_FILE), { recursive: true })
+    writeFileSync(
+      REPORTS_STATE_FILE,
+      JSON.stringify({ lastAt: Date.now(), at: new Date().toISOString() }, null, 2)
+    )
+  } catch (e) {
+    errLog('记录报表拉取时间失败（不影响同步）: ' + e.message)
+  }
+}
+
+// ------------------------------------------------------------
 // 工具函数
 // ------------------------------------------------------------
 
@@ -104,8 +153,9 @@ function errLog(...args) {
   if (runLines.length < 400) runLines.push(args.join(' '))
 }
 
-/** 调用 kdocs_pull.py 抓取数据，返回 { ok: boolean } */
-function pull() {
+/** 调用 kdocs_pull.py 抓取数据，返回 { ok: boolean }
+ *  withReports=false 时只拉三张主表（报表降频，见上方说明） */
+function pull(withReports = true) {
   return new Promise((resolve) => {
     if (!existsSync(PULL_SCRIPT)) {
       errLog('kdocs_pull.py 不存在: ' + PULL_SCRIPT)
@@ -118,8 +168,12 @@ function pull() {
       return
     }
 
-    log('开始从金山文档拉取数据...')
-    const child = spawn(PYTHON_BIN, [PULL_SCRIPT], {
+    // 不传表名 = 拉全部；降频轮次只传三张主表，省掉 5 次分页请求（约 6 秒）
+    const args = withReports ? [PULL_SCRIPT] : [PULL_SCRIPT, '未回款', '未开票', '客户平台']
+    log(withReports
+      ? '开始从金山文档拉取数据（含开票/对账报表）...'
+      : `开始从金山文档拉取数据（本轮跳过开票/对账报表，${REPORTS_REFRESH_HOURS} 小时刷新一次）...`)
+    const child = spawn(PYTHON_BIN, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
@@ -216,21 +270,41 @@ async function runSyncTick() {
   let okAll = false
   let message = ''
   try {
-    const { ok } = await pull()
+    const withReports = reportsDue()
+    const { ok } = await pull(withReports)
     if (!ok) {
       message = '定时同步：本轮抓取失败，跳过导入，等待下次周期重试'
       log(message)
       return 'failed'
     }
-
-    log('开始导入 ' + TABLE_SPECS.length + ' 张表...')
+    // 没拉报表就只导主表：拿上一次的旧 xlsx 去全量替换没有任何意义，还白花时间
+    const specs = withReports ? TABLE_SPECS : CORE_SPECS
+    log('开始导入 ' + specs.length + ' 张表...')
     let okCnt = 0
-    for (const spec of TABLE_SPECS) {
+    const importedTypes = new Set()
+    for (const spec of specs) {
       const imported = await importFile(spec)
-      if (imported) okCnt++
+      if (imported) {
+        okCnt++
+        importedTypes.add(spec.bizType)
+      }
     }
-    okAll = okCnt === TABLE_SPECS.length
-    message = `定时同步完成：成功导入 ${okCnt}/${TABLE_SPECS.length} 张表`
+    okAll = okCnt === specs.length
+
+    // 🔴 降频的「时间戳」只能在报表**导入也成功**之后再记。
+    //   如果只按「拉取成功」记，一旦导入失败（文件被占用等偶发情况），
+    //   接下来 6 小时都会跳过报表，数据会一直是旧的。
+    if (withReports) {
+      const reportsOk = REPORT_SPECS.every((s) => importedTypes.has(s.bizType))
+      if (reportsOk) {
+        markReportsPulled()
+      } else {
+        log('报表未全部导入成功，本轮不记降频时间，下一轮会重新拉取')
+      }
+    }
+
+    message = `定时同步完成：成功导入 ${okCnt}/${specs.length} 张表` +
+      (withReports ? '' : `（开票/对账报表按 ${REPORTS_REFRESH_HOURS} 小时降频，本轮跳过）`)
     log(message)
   } catch (syncErr) {
     message = '定时同步异常：' + syncErr.message
