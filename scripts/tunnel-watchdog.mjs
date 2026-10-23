@@ -101,8 +101,10 @@ function restartService(name) {
     ps.stdout.on('data', () => {})
     ps.on('error', (e) => resolve({ ok: false, err: e.message }))
     ps.on('close', (code) => resolve({ ok: code === 0, code, err: err.trim().slice(0, 300) }))
-    // 30 秒还没结束就别等了，避免卡死整个看门狗
-    setTimeout(() => resolve({ ok: false, err: 'PowerShell 重启超时（30s）' }), 30000)
+    // 2026-10-21 实测踩到：30 秒不够。cloudflared 停止时要断掉 4 条 QUIC/HTTP2 连接，
+    // 加上 PowerShell 冷启动，很容易超过 30 秒 —— 当时日志写「重启失败：超时」，
+    // 但服务其实随后自己起来了。放宽到 60 秒，避免把「慢」误判成「失败」而触发多余的重试。
+    setTimeout(() => resolve({ ok: false, err: 'PowerShell 重启超时（60s）' }), 60000)
   })
 }
 
