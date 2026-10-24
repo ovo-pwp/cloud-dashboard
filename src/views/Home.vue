@@ -369,6 +369,9 @@ function num(v) {
 // 业务员 × 账龄段 矩阵表
 // 行 = 业务员（按合计倒序），列 = 5 个账龄段 + 合计 + 单数
 // ------------------------------------------------------------
+// 金额统一舍到 2 位，避免浮点噪声累积出 1 分钱
+const round2 = (v) => Math.round(v * 100) / 100
+
 const AGING_COLUMNS = [
   { label: '3个月以上', field: 'over3m' },
   { label: '3个月', field: 'm3' },
@@ -377,25 +380,61 @@ const AGING_COLUMNS = [
   { label: '当月', field: 'currentMonth' },
 ]
 
-const matrixRows = computed(() =>
-  salespersonList.value
-    .map((r) => ({
-      name: r.salesperson,
-      dept: r.department,
-      docCount: Number(r.docCount || 0),
-      over3m: Number(r.over3m || 0),
-      m3: Number(r.m3 || 0),
-      m2: Number(r.m2 || 0),
-      m1: Number(r.m1 || 0),
-      currentMonth: Number(r.currentMonth || 0),
-      total: Number(r.total || 0),
+// 2026-10-24：**按部门聚合，一个部门一行**（使用者「销售只有一个」）。
+//   接口返回的是 (salesperson, department) 组合，同一部门可能有多个业务员
+//   （例：销售五部 既有刘晓欣 172 万、又有农立珍 3071 元，后者是代开票挂在别人名下）。
+//   现在同一部门合并成一行，金额/单数累加，「业务员」列显示该部门金额最大的那位。
+//   ⚠️ 部门合计因此是准的；「业务员」列只为标识，不代表该部门所有单都归他。
+const matrixRows = computed(() => {
+  const byDept = new Map()
+  for (const r of salespersonList.value) {
+    const dept = String(r.department || '').trim() || '未分类'
+    let o = byDept.get(dept)
+    if (!o) {
+      o = {
+        dept,
+        name: r.salesperson || '—',
+        mainTotal: -1,
+        docCount: 0,
+        over3m: 0,
+        m3: 0,
+        m2: 0,
+        m1: 0,
+        currentMonth: 0,
+        total: 0,
+        people: 0,
+      }
+      byDept.set(dept, o)
+    }
+    const t = Number(r.total || 0)
+    o.people += 1
+    o.docCount += Number(r.docCount || 0)
+    o.over3m += Number(r.over3m || 0)
+    o.m3 += Number(r.m3 || 0)
+    o.m2 += Number(r.m2 || 0)
+    o.m1 += Number(r.m1 || 0)
+    o.currentMonth += Number(r.currentMonth || 0)
+    o.total += t
+    // 该部门金额最大的业务员 = 「对应业务员」
+    if (t > o.mainTotal) {
+      o.mainTotal = t
+      o.name = r.salesperson || '—'
+    }
+  }
+  return [...byDept.values()]
+    .map((o) => ({
+      ...o,
+      over3m: round2(o.over3m),
+      m3: round2(o.m3),
+      m2: round2(o.m2),
+      m1: round2(o.m1),
+      currentMonth: round2(o.currentMonth),
+      total: round2(o.total),
     }))
     .sort((a, b) => b.total - a.total)
-)
+})
 
-// 合计行：逐列求和。先逐格相加再统一舍到 2 位，避免浮点噪声累积出 1 分钱
-const round2 = (v) => Math.round(v * 100) / 100
-
+// 合计行：逐列求和（round2 已在上方统一定义）
 function matrixSummary({ columns }) {
   return columns.map((col, i) => {
     // 前两列（部门 / 业务员）是文本列，合计行只在前两列里写一次「合计」
