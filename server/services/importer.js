@@ -173,7 +173,13 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
       warnings.push({ lineNo, docNo, reason: dataWarning })
     }
 
-    const { department, salesperson } = splitSalesperson(rawSalesperson)
+    // 第 16 列 = 「部门」（销售战队，2026-10-24 起由取数脚本单独输出）。
+    // 有值就用它当 department；没有（老格式/源表没这列）才退回按人名猜的 splitSalesperson。
+    // ⚠️ 「业务员」从这一版起恢复成人名（客户经理），不再被战队覆盖 —— 矩阵要同时显示两列。
+    const deptFromSheet = toText(r[15])
+    const split = splitSalesperson(rawSalesperson)
+    const department = deptFromSheet || split.department
+    const salesperson = split.salesperson
 
     sumTotal += amountTotal
 

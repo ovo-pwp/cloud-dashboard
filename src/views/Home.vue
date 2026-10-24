@@ -152,10 +152,17 @@
           show-summary
           :summary-method="matrixSummary"
         >
-          <el-table-column prop="name" label="业务员" min-width="190">
+          <!-- 2026-10-24 使用者要求：「一个部门一个对应业务员」两列都显示。
+               原来是「业务员 + 部门 tag」挤在一列里，现在拆成独立的「部门」「业务员」两列。
+               数据来源：department = 源表「销售战队」，salesperson = 源表「客户经理」（人名）。 -->
+          <el-table-column prop="dept" label="部门" min-width="130">
+            <template #default="{ row }">
+              <span class="mx-name">{{ row.dept || '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="name" label="业务员" min-width="120">
             <template #default="{ row }">
               <span class="mx-name">{{ row.name }}</span>
-              <el-tag v-if="row.dept" size="small" type="info" class="mx-dept">{{ row.dept }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column
@@ -391,7 +398,9 @@ const round2 = (v) => Math.round(v * 100) / 100
 
 function matrixSummary({ columns }) {
   return columns.map((col, i) => {
+    // 前两列（部门 / 业务员）是文本列，合计行只在前两列里写一次「合计」
     if (i === 0) return '合计'
+    if (i === 1) return ''
     const p = col.property
     const sum = matrixRows.value.reduce((a, r) => a + Number(r[p] || 0), 0)
     return p === 'docCount' ? String(sum) : num(round2(sum))
