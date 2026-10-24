@@ -195,7 +195,8 @@
 
       <!--
         2026-10-17 使用者：「这个就归类到一起吧」——「当日新增明细」不再逐条列单据，
-        改为 `sumCards` 的「当日新增 · 按业务员 / 客户」（业务员 | 客户 | 张数 | 金额），与回款卡同族。
+        改为 `sumCards` 的「当日新增 · 按部门 / 客户」（部门 | 客户 | 张数 | 金额），与回款卡同族。
+        （2026-10-24 使用者「开票跟回款都按照销售战队」⇒ 分组维度由业务员改成销售战队。）
         （新增恒「当月」档 ⇒ 不加账龄列；账龄列只给「流出」类卡片：当日回款 / 当日已开票。）
       -->
 
@@ -218,7 +219,8 @@
           show-summary
           :summary-method="summaryByProp"
         >
-          <el-table-column prop="salesperson" label="业务员" min-width="120" />
+          <!-- 2026-10-24 使用者「开票跟回款都按照销售战队」⇒ 这里是部门（值来自 department） -->
+          <el-table-column prop="salesperson" label="部门" min-width="120" />
           <el-table-column prop="customer_name" label="客户" min-width="260" show-overflow-tooltip />
           <el-table-column v-if="c.withAging" prop="aging_category" label="账龄" width="150" show-overflow-tooltip />
           <el-table-column prop="count" label="张数" width="100" align="right" />
@@ -480,7 +482,9 @@ function bySpCustomer(rows, opts = {}) {
   const withAging = !!opts.withAging
   const map = new Map()
   for (const r of rows || []) {
-    const sp = (r.salesperson || '').trim() || '未指定'
+    // 2026-10-24 使用者「开票跟回款都按照销售战队」⇒ 汇总卡按 department 分组，不再按人名。
+    // 字段名仍叫 salesperson，是为了让下游排序/模板不用跟着改（值已经是部门）。
+    const sp = (r.department || '').trim() || '未分类'
     const cu = (r.customer_name || '').trim() || '未知客户'
     const ag = (r.aging_category || '').trim()
     const k = JSON.stringify(withAging ? [sp, cu, ag] : [sp, cu])
@@ -526,8 +530,8 @@ const sumCards = computed(() => {
     const addRows = bySpCustomer(deltaDetail.value?.added)
     const payRows = bySpCustomer(deltaDetail.value?.removed, { withAging: true })
     const cards = []
-    if (addRows.length) cards.push({ key: 'pay-add', title: '当日新增 · 按业务员 / 客户', rows: addRows, withAging: false })
-    if (payRows.length) cards.push({ key: 'pay', title: '当日回款 · 按业务员 / 客户', rows: payRows, withAging: true })
+    if (addRows.length) cards.push({ key: 'pay-add', title: '当日新增 · 按部门 / 客户', rows: addRows, withAging: false })
+    if (payRows.length) cards.push({ key: 'pay', title: '当日回款 · 按部门 / 客户', rows: payRows, withAging: true })
     return cards
   }
   if (current.value === 'shipped_uninvoiced') {
@@ -536,8 +540,8 @@ const sumCards = computed(() => {
     // 当日已开票：这一批离开未开票的单（开票转去未回款线），可能跨多档 ⇒ 带账龄列
     const invRows = bySpCustomer(uninvoicedRemoved.value, { withAging: true })
     const cards = []
-    if (addRows.length) cards.push({ key: 'uninv-add', title: '当日新增的未开票 · 按业务员 / 客户', rows: addRows, withAging: false })
-    if (invRows.length) cards.push({ key: 'uninv-inv', title: '当日已开票 · 按业务员 / 客户', rows: invRows, withAging: true })
+    if (addRows.length) cards.push({ key: 'uninv-add', title: '当日新增的未开票 · 按部门 / 客户', rows: addRows, withAging: false })
+    if (invRows.length) cards.push({ key: 'uninv-inv', title: '当日已开票 · 按部门 / 客户', rows: invRows, withAging: true })
     return cards
   }
   return []

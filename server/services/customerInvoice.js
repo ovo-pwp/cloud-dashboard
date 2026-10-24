@@ -352,7 +352,9 @@ export async function getLineDelta({ bizType, salesperson }) {
              summary: { addedAmount: 0, removedAmount: 0, changedAmount: 0, delta: 0 }, ready: false }
   }
   const [cur, prev] = bs
-  const cols = `doc_no, customer_name, salesperson, amount_total::float8 amt, aging_category`
+  // 2026-10-24 使用者「开票跟回款都按照销售战队」⇒ 多带一个 department，
+  // 前端汇总卡按部门分组（原先按 salesperson 人名）。
+  const cols = `doc_no, customer_name, salesperson, department, amount_total::float8 amt, aging_category`
   const curAll = (await query(`SELECT ${cols} FROM receivable_detail WHERE batch_id=$1`, [cur.id])).rows
   const prevAll = (await query(`SELECT ${cols} FROM receivable_detail WHERE batch_id=$1`, [prev.id])).rows
 
