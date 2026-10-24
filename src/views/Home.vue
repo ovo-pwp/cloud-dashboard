@@ -140,8 +140,8 @@
       <!-- 业务员 × 账龄段：一张矩阵表，跟发领导的 Excel 汇总同构 -->
       <el-card shadow="never" class="block-card">
         <template #header>
-          <span class="card-title">业务员 × 账龄段</span>
-          <span class="card-hint">按合计倒序 · 同一行看一个人的全部账龄</span>
+          <span class="card-title">{{ current === 'billed_unpaid' ? '部门 × 账龄段' : '部门 × 业务员 × 账龄段' }}</span>
+          <span class="card-hint">按合计倒序 · 同一行看{{ current === 'billed_unpaid' ? '一个部门' : '一个人' }}的全部账龄</span>
         </template>
         <el-table
           :data="matrixRows"
@@ -154,13 +154,16 @@
         >
           <!-- 2026-10-24 使用者要求：「一个部门一个对应业务员」两列都显示。
                原来是「业务员 + 部门 tag」挤在一列里，现在拆成独立的「部门」「业务员」两列。
-               数据来源：department = 源表「销售战队」，salesperson = 源表「客户经理」（人名）。 -->
+               数据来源：department = 源表「销售战队」，salesperson = 源表「客户经理」（人名）。
+               ⚠️ 已开票未回款线（billed_unpaid）**不显示业务员列**（使用者 15:02「开票的不需要业务员了」）：
+                  该线源表(客户开票明细表)的业务员填报不准（同一单在对账表里是唐良超、在开票表里写成农立珍），
+                  按人看会误导，只按部门看。 -->
           <el-table-column prop="dept" label="部门" min-width="130">
             <template #default="{ row }">
               <span class="mx-name">{{ row.dept || '—' }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="name" label="业务员" min-width="120">
+          <el-table-column v-if="current !== 'billed_unpaid'" prop="name" label="业务员" min-width="120">
             <template #default="{ row }">
               <span class="mx-name">{{ row.name }}</span>
             </template>
@@ -436,10 +439,10 @@ const matrixRows = computed(() => {
 
 // 合计行：逐列求和（round2 已在上方统一定义）
 function matrixSummary({ columns }) {
-  return columns.map((col, i) => {
-    // 前两列（部门 / 业务员）是文本列，合计行只在前两列里写一次「合计」
-    if (i === 0) return '合计'
-    if (i === 1) return ''
+  return columns.map((col) => {
+    // 按 property 判断，不依赖列顺序（业务员列在已开票未回款线是不渲染的）
+    if (col.property === 'dept') return '合计'
+    if (col.property === 'name') return ''
     const p = col.property
     const sum = matrixRows.value.reduce((a, r) => a + Number(r[p] || 0), 0)
     return p === 'docCount' ? String(sum) : num(round2(sum))
