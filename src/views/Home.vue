@@ -140,8 +140,8 @@
       <!-- 业务员 × 账龄段：一张矩阵表，跟发领导的 Excel 汇总同构 -->
       <el-card shadow="never" class="block-card">
         <template #header>
-          <span class="card-title">{{ current === 'billed_unpaid' ? '部门 × 账龄段' : '部门 × 业务员 × 账龄段' }}</span>
-          <span class="card-hint">按合计倒序 · 同一行看{{ current === 'billed_unpaid' ? '一个部门' : '一个人' }}的全部账龄</span>
+          <span class="card-title">部门 × 业务员 × 账龄段</span>
+          <span class="card-hint">按合计倒序 · 同一行看一个部门的全部账龄</span>
         </template>
         <el-table
           :data="matrixRows"
@@ -155,15 +155,15 @@
           <!-- 2026-10-24 使用者要求：「一个部门一个对应业务员」两列都显示。
                原来是「业务员 + 部门 tag」挤在一列里，现在拆成独立的「部门」「业务员」两列。
                数据来源：department = 源表「销售战队」，salesperson = 源表「客户经理」（人名）。
-               ⚠️ 已开票未回款线（billed_unpaid）**不显示业务员列**（使用者 15:02「开票的不需要业务员了」）：
-                  该线源表(客户开票明细表)的业务员填报不准（同一单在对账表里是唐良超、在开票表里写成农立珍），
-                  按人看会误导，只按部门看。 -->
+               ⚠️ 2026-10-24 15:02 曾按使用者要求隐藏已开票未回款线的业务员列（当时该线源表业务员填报不准）；
+                  16:30 使用者又说「这里的也添加业务员」⇒ 恢复两列。现在每条线的数据都已按
+                  「客户经理→销售战队」归一，业务员列显示该部门金额最大的那位。 -->
           <el-table-column prop="dept" label="部门" min-width="130">
             <template #default="{ row }">
               <span class="mx-name">{{ row.dept || '—' }}</span>
             </template>
           </el-table-column>
-          <el-table-column v-if="current !== 'billed_unpaid'" prop="name" label="业务员" min-width="120">
+          <el-table-column prop="name" label="业务员" min-width="120">
             <template #default="{ row }">
               <span class="mx-name">{{ row.name }}</span>
             </template>
