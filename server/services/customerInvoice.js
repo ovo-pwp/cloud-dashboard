@@ -13,6 +13,7 @@
 import fs from 'node:fs'
 import XLSX from 'xlsx'
 import { query, pool } from '../db/pool.js'
+import { normalizeDept } from '../constants/dept.js'
 
 export const CUSTOMER_INVOICE_BIZ_TYPE = 'customer_invoice'
 export const CUSTOMER_INVOICE_OUT_NAME = '(客户开票明细表)开票回款.xlsx'
@@ -367,10 +368,16 @@ export async function getLineDelta({ bizType, salesperson }) {
   const curRows = sp ? curAll.filter((r) => (r.salesperson || '').trim() === sp) : curAll
   const prevRows = sp ? prevAll.filter((r) => (r.salesperson || '').trim() === sp) : prevAll
 
-  const prevMap = new Map(prevRows.map((r) => [r.doc_no, r]))
+  // 2026-10-24：统一部门口径。历史批次里可能是旧名（「大客户中心」）或空，
+  // 这里按 客户经理→战队 的权威表重算一遍，避免「当日已开票」卡里冒出旧部门名。
+  const norm = (rows) => rows.map((r) => ({ ...r, department: normalizeDept(r.department, r.salesperson) }))
+  const curNorm = norm(curRows)
+  const prevNorm = norm(prevRows)
+
+  const prevMap = new Map(prevNorm.map((r) => [r.doc_no, r]))
   const added = []
   const changed = []
-  for (const r of curRows) {
+  for (const r of curNorm) {
     const p = prevMap.get(r.doc_no)
     if (!p) {
       added.push(r)
