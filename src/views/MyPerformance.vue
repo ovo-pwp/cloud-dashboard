@@ -596,20 +596,30 @@ function normAccounts(list) {
   return (list || []).map(r => ({ name: r.name })).filter(r => r.name)
 }
 
-/** 业务员候选名单：已开票 ∪ 已发货 ∪ 客户平台，三张源表的业务员不一样，
- *  只取前两个会漏掉「只在客户平台有单」的人（那样选不到他，页面看起来像没数据）。 */
+/** 业务员候选名单：**只取当前业务线**（2026-10-24 使用者「这里按照业务员来」）。
+ *
+ *  原来是三条线的并集，理由是「只取前两个会漏掉只在客户平台有单的人」。
+ *  实际用起来下拉里会混进别条线的人（如客户平台的「农立珍」「大客户中心」），
+ *  在「已开票未回款」页看着莫名其妙 ⇒ 改成跟当前业务线一致，切 tab 时重新加载。
+ */
 async function loadSalespersonList() {
-  const [billed, shipped, cp] = await Promise.all([
-    request.get('/filters', { params: { bizType: 'billed_unpaid' } }).catch(() => ({})),
-    request.get('/filters', { params: { bizType: 'shipped_uninvoiced' } }).catch(() => ({})),
-    request.get('/customer-platform-unpaid/salespersons').catch(() => ({})),
-  ])
-  const names = [
-    ...normAccounts(billed.salespeople).map(r => r.name),
-    ...normAccounts(shipped.salespeople).map(r => r.name),
-    ...((cp.salespersons || cp.records || []).map(r => (typeof r === 'string' ? r : r.salesperson || r.name))),
-  ].filter(Boolean)
-  salespersonList.value = [...new Set(names)].sort().map(name => ({ name, department: '' }))
+  const biz = currentBiz.value
+  try {
+    let names = []
+    if (biz === 'customer_platform') {
+      const cp = await request.get('/customer-platform-unpaid/salespersons').catch(() => ({}))
+      names = (cp.salespersons || cp.records || [])
+        .map((r) => (typeof r === 'string' ? r : r.salesperson || r.name))
+    } else {
+      const res = await request.get('/filters', { params: { bizType: biz } }).catch(() => ({}))
+      names = normAccounts(res.salespeople).map((r) => r.name)
+    }
+    salespersonList.value = [...new Set(names.filter(Boolean))]
+      .sort((a, b) => String(a).localeCompare(String(b), 'zh-Hans-CN'))
+      .map((name) => ({ name, department: '' }))
+  } catch {
+    salespersonList.value = []
+  }
 }
 
 /**
@@ -758,10 +768,19 @@ function onSalespersonChange() {
   loadData()
 }
 
-function onBizChange() {
+async function onBizChange() {
   // 换了业务线，客户名单整套都变了
   selectedCustomer.value = ''
   resetNoteEdit()
+  // 业务员候选也按业务线重取（2026-10-24）：下拉只列这条线有的人
+  await loadSalespersonList()
+  // 当前选中的人如果这条线没有，清掉，避免停在一个查不到数据的名字上
+  if (
+    selectedSalesperson.value &&
+    !salespersonList.value.some((s) => s.name === selectedSalesperson.value)
+  ) {
+    selectedSalesperson.value = ''
+  }
   loadData()
 }
 
