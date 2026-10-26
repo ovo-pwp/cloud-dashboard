@@ -126,6 +126,14 @@ export function updateDeptNote(bizType, department, note) {
   return request.put('/dept-note', { bizType, department, note })
 }
 
+/** 汇总卡逐行备注（2026-10-26）：标「这笔是补单还是什么原因」 */
+export function getLedgerNotes(bizType) {
+  return request.get('/ledger-note', { params: { bizType } })
+}
+export function updateLedgerNote({ bizType, cardKey, department, customer, note }) {
+  return request.put('/ledger-note', { bizType, cardKey, department, customer, note })
+}
+
 /** 修改某条明细的人工提醒（与系统自动的 data_warning 是两个字段） */
 export function updateDetailReminder(id, reminder) {
   return request.put('/detail/reminder', { id, reminder })

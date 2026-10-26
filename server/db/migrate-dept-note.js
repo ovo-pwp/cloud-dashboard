@@ -33,12 +33,27 @@ CREATE TABLE IF NOT EXISTS dept_note (
   PRIMARY KEY (biz_type, department)
 );
 COMMENT ON TABLE dept_note IS '首页矩阵「部门」行的备注，按 业务线+部门 唯一，跨批次保留';
+
+-- 2026-10-26：底部「当日回款 / 当日新增」卡片的逐行备注
+--   （使用者要标注「这笔是补单还是别的原因」）
+--   键 = 业务线 + 卡片(新增/回款) + 部门 + 客户 ⇒ 同一客户在「新增」和「回款」里各存各的
+CREATE TABLE IF NOT EXISTS ledger_note (
+  biz_type   text        NOT NULL,
+  card_key   text        NOT NULL,
+  department text        NOT NULL,
+  customer   text        NOT NULL,
+  note       text,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (biz_type, card_key, department, customer)
+);
+COMMENT ON TABLE ledger_note IS '首页底部汇总卡逐行备注：业务线+卡片+部门+客户 唯一';
 `
 
 const main = async () => {
   await pool.query(sql)
-  const r = await pool.query('SELECT COUNT(*)::int n FROM dept_note')
-  console.log('✅ dept_note 已就绪（幂等），现有 ' + r.rows[0].n + ' 条')
+  const a = await pool.query('SELECT COUNT(*)::int n FROM dept_note')
+  const b = await pool.query('SELECT COUNT(*)::int n FROM ledger_note')
+  console.log(`✅ dept_note / ledger_note 已就绪（幂等），现有 ${a.rows[0].n} / ${b.rows[0].n} 条`)
   await pool.end()
 }
 

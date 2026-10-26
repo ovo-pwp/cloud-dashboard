@@ -989,6 +989,64 @@ router.put(
   }
 )
 
+// ------------------------------------------------------------
+// 汇总卡逐行备注（2026-10-26 使用者「是下面的回款记录…补单还是什么原因」）
+//   GET  /api/ledger-note?bizType=xxx → { notes: { "cardKey|部门|客户": note } }
+//   PUT  /api/ledger-note             → body { bizType, cardKey, department, customer, note }
+//   键 = 业务线 + 卡片 + 部门 + 客户 ⇒ 同一客户在「当日新增」和「当日回款」里各存各的
+// ------------------------------------------------------------
+const LEDGER_CARD_KEYS = new Set(['pay-add', 'pay', 'uninv-add', 'uninv-inv'])
+
+router.get('/ledger-note', async (req, res, next) => {
+  try {
+    const bizType = resolveBizType(req)
+    const { rows } = await query(
+      'SELECT card_key, department, customer, note FROM ledger_note WHERE biz_type = $1 AND note IS NOT NULL',
+      [bizType]
+    )
+    const notes = {}
+    for (const r of rows) notes[`${r.card_key}|${r.department}|${r.customer}`] = r.note
+    res.json({ bizType, notes })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.put('/ledger-note', requireRole(...CAN_EDIT_DETAIL), async (req, res, next) => {
+  try {
+    const bizType = req.body?.bizType
+    const cardKey = String(req.body?.cardKey ?? '').trim()
+    const department = String(req.body?.department ?? '').trim()
+    const customer = String(req.body?.customer ?? '').trim()
+    const text = typeof req.body?.note === 'string' ? req.body.note : ''
+
+    if (!BIZ_TYPES[bizType]) return res.status(400).json({ error: '缺少有效的业务类型' })
+    if (!LEDGER_CARD_KEYS.has(cardKey)) return res.status(400).json({ error: '缺少有效的卡片标识' })
+    if (!department) return res.status(400).json({ error: '缺少部门' })
+    if (!customer) return res.status(400).json({ error: '缺少客户' })
+    if (text.length > 500) return res.status(400).json({ error: '备注内容过长（最多 500 字）' })
+
+    const value = text.trim() ? text : null
+    if (value === null) {
+      await query(
+        'DELETE FROM ledger_note WHERE biz_type=$1 AND card_key=$2 AND department=$3 AND customer=$4',
+        [bizType, cardKey, department, customer]
+      )
+    } else {
+      await query(
+        `INSERT INTO ledger_note (biz_type, card_key, department, customer, note, updated_at)
+         VALUES ($1,$2,$3,$4,$5,now())
+         ON CONFLICT (biz_type, card_key, department, customer)
+         DO UPDATE SET note = EXCLUDED.note, updated_at = now()`,
+        [bizType, cardKey, department, customer, value]
+      )
+    }
+    res.json({ ok: true, bizType, cardKey, department, customer, note: value })
+  } catch (err) {
+    next(err)
+  }
+})
+
 router.put(
   '/detail/reminder',
   requireRole(...CAN_EDIT_DETAIL),

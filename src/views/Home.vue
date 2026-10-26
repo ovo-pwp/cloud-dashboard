@@ -190,28 +190,6 @@
               <span class="mx-doc">{{ row.docCount }}</span>
             </template>
           </el-table-column>
-          <!-- 2026-10-26 部门备注：点一下就能写，回车/失焦保存（存 dept_note，跨批次保留） -->
-          <el-table-column label="备注" min-width="200">
-            <template #default="{ row }">
-              <el-input
-                v-if="editingDept === row.dept"
-                v-model="deptNoteInput"
-                size="small"
-                placeholder="写一句备注，回车保存"
-                @keyup.enter="saveDeptNote(row.dept)"
-                @blur="saveDeptNote(row.dept)"
-                @keyup.esc="cancelDeptEdit"
-              />
-              <span
-                v-else
-                class="dept-note"
-                :class="{ 'is-empty': !deptNotes[row.dept] }"
-                @click="startDeptEdit(row.dept)"
-              >
-                {{ deptNotes[row.dept] || '点击填写' }}
-              </span>
-            </template>
-          </el-table-column>
         </el-table>
       </el-card>
 
@@ -266,6 +244,29 @@
           <el-table-column prop="amt" label="金额（元）" min-width="150" align="right">
             <template #default="{ row }"><span class="mx-amt">{{ num(row.amt) }}</span></template>
           </el-table-column>
+          <!-- 2026-10-26 逐行备注：标「这笔是补单 / 红冲 / 正常回款」等。
+               键 = 卡片 + 部门 + 客户，存 ledger_note；不进导出图（发出去的是干净的数）。 -->
+          <el-table-column label="备注" min-width="180" class-name="no-export">
+            <template #default="{ row }">
+              <el-input
+                v-if="editingLedgerKey === ledgerKey(c.key, row.salesperson, row.customer_name)"
+                v-model="ledgerNoteInput"
+                size="small"
+                placeholder="如：补录10/10回款 / 红冲"
+                @keyup.enter="saveLedgerNote(ledgerKey(c.key, row.salesperson, row.customer_name), { cardKey: c.key, department: row.salesperson, customer: row.customer_name })"
+                @blur="saveLedgerNote(ledgerKey(c.key, row.salesperson, row.customer_name), { cardKey: c.key, department: row.salesperson, customer: row.customer_name })"
+                @keyup.esc="cancelLedgerEdit"
+              />
+              <span
+                v-else
+                class="dept-note"
+                :class="{ 'is-empty': !ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)] }"
+                @click="startLedgerEdit(ledgerKey(c.key, row.salesperson, row.customer_name))"
+              >
+                {{ ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)] || '点击填写' }}
+              </span>
+            </template>
+          </el-table-column>
         </el-table>
       </el-card>
     </template>
@@ -283,7 +284,7 @@ import { captureWithFullWidth } from '@/utils/exportSize'
 import { storeToRefs } from 'pinia'
 import { useBizStore } from '@/stores/biz'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { getSummary, getAgingBySalesperson, getLineDelta, getDeptNotes, updateDeptNote } from '@/api'
+import { getSummary, getAgingBySalesperson, getLineDelta, getLedgerNotes, updateLedgerNote } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 
 const biz = useBizStore()
@@ -680,8 +681,8 @@ async function loadAll(silent) {
     // 后端可能返回 prev: undefined（老版本接口），统一归一成 null
     if (!summary.prev) summary.prev = null
     salespersonList.value = bysp.records || []
-    // 部门备注（与主体数据并行拉，失败不影响看板）
-    loadDeptNotes()
+    // 汇总卡逐行备注（与主体数据并行，失败不影响看板）
+    loadLedgerNotes()
 
     // 「当日新增 / 回款明细」：只未回款线拉一次（复用 line-delta，不是新增后端负担）。
     // 切到未开票线时显式置 null ⇒ 两张表都不渲染（使用者 10-14：「开票的先不要」）。
@@ -718,47 +719,52 @@ async function loadAll(silent) {
 }
 
 // ------------------------------------------------------------
-// 部门备注（2026-10-26 使用者「建一列备注」）
-//   矩阵每个部门一行，右侧可以写一句话；存 dept_note（biz_type + department 唯一，跨批次保留）。
-//   编辑态用 editingDept 记住「正在编辑哪个部门」，静默刷新时跳过重载，否则会把正在输的内容冲掉。
+// 汇总卡逐行备注（2026-10-26 使用者：「是下面的回款记录…是补单还是什么原因」）
+//   键 = 卡片(新增/回款) + 部门 + 客户，存 ledger_note，跨批次保留。
+//   编辑时记 editingLedgerKey，静默刷新跳过重载，免得冲掉正在输的内容。
 // ------------------------------------------------------------
-const deptNotes = ref({})          // { 部门: 备注 }
-const editingDept = ref(null)
-const deptNoteInput = ref('')
+const ledgerNotes = ref({})        // { "cardKey|部门|客户": note }
+const editingLedgerKey = ref(null)
+const ledgerNoteInput = ref('')
 
-async function loadDeptNotes() {
-  if (editingDept.value) return    // 正在编辑就别重载，免得冲掉输入
+const ledgerKey = (cardKey, dept, customer) => `${cardKey}|${dept || ''}|${customer || ''}`
+
+async function loadLedgerNotes() {
+  if (editingLedgerKey.value) return
   try {
-    const r = await getDeptNotes(current.value)
-    deptNotes.value = r.notes || {}
+    const r = await getLedgerNotes(current.value)
+    ledgerNotes.value = r.notes || {}
   } catch {
-    deptNotes.value = {}
+    ledgerNotes.value = {}
   }
 }
 
-function startDeptEdit(dept) {
-  editingDept.value = dept
-  deptNoteInput.value = deptNotes.value[dept] || ''
+function startLedgerEdit(k) {
+  editingLedgerKey.value = k
+  ledgerNoteInput.value = ledgerNotes.value[k] || ''
 }
 
-async function saveDeptNote(dept) {
-  if (editingDept.value !== dept) return   // 已经保存过（blur 与 enter 都触发）
-  const text = deptNoteInput.value
-  editingDept.value = null
+async function saveLedgerNote(k, meta) {
+  if (editingLedgerKey.value !== k) return
+  const text = ledgerNoteInput.value
+  editingLedgerKey.value = null
   try {
-    await updateDeptNote(current.value, dept, text)
-    const next = { ...deptNotes.value }
-    if (text.trim()) next[dept] = text
-    else delete next[dept]
-    deptNotes.value = next
+    await updateLedgerNote({ bizType: current.value, ...meta, note: text })
+    const next = { ...ledgerNotes.value }
+    if (text.trim()) next[k] = text
+    else delete next[k]
+    ledgerNotes.value = next
   } catch {
     ElMessage.error('备注保存失败')
   }
 }
 
-function cancelDeptEdit() {
-  editingDept.value = null
+function cancelLedgerEdit() {
+  editingLedgerKey.value = null
 }
+
+// 部门备注（矩阵用）— 2026-10-26 17:52 使用者澄清「不是总表」，矩阵不再显示，逻辑保留备用
+const deptNotes = ref({})
 
 watch(current, () => {
   // 🔴 切业务类型**立刻**清掉两张当日明细表，不能等 loadAll 里那串请求回来才清 ——
@@ -767,7 +773,8 @@ watch(current, () => {
   deltaDetail.value = null
   uninvoicedAdded.value = null
   uninvoicedRemoved.value = null
-  // 部门备注也按业务线各存一份
+  // 备注也按业务线各存一份
+  ledgerNotes.value = {}
   deptNotes.value = {}
   loadAll()
 })
