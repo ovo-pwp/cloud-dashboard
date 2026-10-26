@@ -118,6 +118,14 @@ export function updateDetailNote(bizType, docNo, note) {
   return request.put('/detail/note', { bizType, docNo, note })
 }
 
+/** 部门备注（2026-10-26）：首页矩阵按部门写一句话，跨批次保留 */
+export function getDeptNotes(bizType) {
+  return request.get('/dept-note', { params: { bizType } })
+}
+export function updateDeptNote(bizType, department, note) {
+  return request.put('/dept-note', { bizType, department, note })
+}
+
 /** 修改某条明细的人工提醒（与系统自动的 data_warning 是两个字段） */
 export function updateDetailReminder(id, reminder) {
   return request.put('/detail/reminder', { id, reminder })

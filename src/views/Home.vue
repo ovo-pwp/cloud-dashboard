@@ -190,6 +190,28 @@
               <span class="mx-doc">{{ row.docCount }}</span>
             </template>
           </el-table-column>
+          <!-- 2026-10-26 部门备注：点一下就能写，回车/失焦保存（存 dept_note，跨批次保留） -->
+          <el-table-column label="备注" min-width="200">
+            <template #default="{ row }">
+              <el-input
+                v-if="editingDept === row.dept"
+                v-model="deptNoteInput"
+                size="small"
+                placeholder="写一句备注，回车保存"
+                @keyup.enter="saveDeptNote(row.dept)"
+                @blur="saveDeptNote(row.dept)"
+                @keyup.esc="cancelDeptEdit"
+              />
+              <span
+                v-else
+                class="dept-note"
+                :class="{ 'is-empty': !deptNotes[row.dept] }"
+                @click="startDeptEdit(row.dept)"
+              >
+                {{ deptNotes[row.dept] || '点击填写' }}
+              </span>
+            </template>
+          </el-table-column>
         </el-table>
       </el-card>
 
@@ -261,7 +283,7 @@ import { captureWithFullWidth } from '@/utils/exportSize'
 import { storeToRefs } from 'pinia'
 import { useBizStore } from '@/stores/biz'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { getSummary, getAgingBySalesperson, getLineDelta } from '@/api'
+import { getSummary, getAgingBySalesperson, getLineDelta, getDeptNotes, updateDeptNote } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 
 const biz = useBizStore()
@@ -462,6 +484,8 @@ function matrixSummary({ columns }) {
     // 按 property 判断，不依赖列顺序（业务员列在已开票未回款线是不渲染的）
     if (col.property === 'dept') return '合计'
     if (col.property === 'name') return ''
+    // 备注列（无 property）不参与求和，合计行留空
+    if (!col.property) return ''
     const p = col.property
     const sum = matrixRows.value.reduce((a, r) => a + Number(r[p] || 0), 0)
     return p === 'docCount' ? String(sum) : num(round2(sum))
@@ -656,6 +680,8 @@ async function loadAll(silent) {
     // 后端可能返回 prev: undefined（老版本接口），统一归一成 null
     if (!summary.prev) summary.prev = null
     salespersonList.value = bysp.records || []
+    // 部门备注（与主体数据并行拉，失败不影响看板）
+    loadDeptNotes()
 
     // 「当日新增 / 回款明细」：只未回款线拉一次（复用 line-delta，不是新增后端负担）。
     // 切到未开票线时显式置 null ⇒ 两张表都不渲染（使用者 10-14：「开票的先不要」）。
@@ -691,6 +717,49 @@ async function loadAll(silent) {
   }
 }
 
+// ------------------------------------------------------------
+// 部门备注（2026-10-26 使用者「建一列备注」）
+//   矩阵每个部门一行，右侧可以写一句话；存 dept_note（biz_type + department 唯一，跨批次保留）。
+//   编辑态用 editingDept 记住「正在编辑哪个部门」，静默刷新时跳过重载，否则会把正在输的内容冲掉。
+// ------------------------------------------------------------
+const deptNotes = ref({})          // { 部门: 备注 }
+const editingDept = ref(null)
+const deptNoteInput = ref('')
+
+async function loadDeptNotes() {
+  if (editingDept.value) return    // 正在编辑就别重载，免得冲掉输入
+  try {
+    const r = await getDeptNotes(current.value)
+    deptNotes.value = r.notes || {}
+  } catch {
+    deptNotes.value = {}
+  }
+}
+
+function startDeptEdit(dept) {
+  editingDept.value = dept
+  deptNoteInput.value = deptNotes.value[dept] || ''
+}
+
+async function saveDeptNote(dept) {
+  if (editingDept.value !== dept) return   // 已经保存过（blur 与 enter 都触发）
+  const text = deptNoteInput.value
+  editingDept.value = null
+  try {
+    await updateDeptNote(current.value, dept, text)
+    const next = { ...deptNotes.value }
+    if (text.trim()) next[dept] = text
+    else delete next[dept]
+    deptNotes.value = next
+  } catch {
+    ElMessage.error('备注保存失败')
+  }
+}
+
+function cancelDeptEdit() {
+  editingDept.value = null
+}
+
 watch(current, () => {
   // 🔴 切业务类型**立刻**清掉两张当日明细表，不能等 loadAll 里那串请求回来才清 ——
   //    否则切到未开票线之后有几秒钟还挂着**上一条线**的单（串味）。
@@ -698,6 +767,8 @@ watch(current, () => {
   deltaDetail.value = null
   uninvoicedAdded.value = null
   uninvoicedRemoved.value = null
+  // 部门备注也按业务线各存一份
+  deptNotes.value = {}
   loadAll()
 })
 onMounted(loadAll)
@@ -828,6 +899,19 @@ async function exportImage() {
 /* .aging-* 样式随「账龄结构」卡一起删除（2026-10-13）—— 保留 @keyframes fadeRow 会被清理器报未使用，故一并删 */
 .strong { font-weight: 600; color: #f56c6c; }
 .card-hint { margin-left: 10px; font-size: 12px; color: #909399; }
+
+/* 部门备注单元格（2026-10-26） */
+.dept-note {
+  display: block;
+  min-height: 22px;
+  line-height: 22px;
+  cursor: pointer;
+  color: #303133;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.dept-note:hover { background: #f4f6f8; }
+.dept-note.is-empty { color: #c0c4cc; }
 
 /* 汇总卡空状态（2026-10-26） */
 .empty-sum { text-align: center; padding: 26px 0 22px; }

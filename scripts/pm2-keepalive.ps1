@@ -13,7 +13,7 @@
 $ErrorActionPreference = 'SilentlyContinue'
 
 $node   = 'C:\Program Files\nodejs\node.exe'
-$pm2js  = 'C:\Users\Administrator\AppData\Roaming\npm\node_modules\pm2\bin\pm2'
+$pm2js  = 'E:\Dev\npm-global\node_modules\pm2\bin\pm2'
 $cwd    = 'C:\Users\Administrator\Desktop\cloud-dashboard'
 $logDir = Join-Path $cwd 'logs'
 $log    = Join-Path $logDir 'pm2-keepalive.log'
@@ -44,9 +44,7 @@ Write-Log 'port 3000 not listening -> pm2 resurrect'
 Set-Location $cwd
 $out = & $node $pm2js resurrect 2>&1 | Out-String
 $code = $LASTEXITCODE
-# pm2 resurrect 会打印一张 ASCII 表格（含框线字符），整段记录既冗长又会乱码。
-# 只留「是否恢复成功」的关键行，足够判断。
-$brief = ($out -split "`n" | Where-Object { $_ -match 'restored|Resurrecting|error|Error' }) -join ' ; '
+# pm2 resurrect 会打印一�?ASCII 表格（含框线字符），整段记录既冗长又会乱码�?# 只留「是否恢复成功」的关键行，足够判断�?$brief = ($out -split "`n" | Where-Object { $_ -match 'restored|Resurrecting|error|Error' }) -join ' ; '
 Write-Log ('resurrect exit=' + $code + ' ' + $brief.Trim())
 
 Start-Sleep -Seconds 10

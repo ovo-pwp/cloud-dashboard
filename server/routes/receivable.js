@@ -996,6 +996,64 @@ router.put(
 )
 
 // ------------------------------------------------------------
+// 部门备注（2026-10-26 使用者「建一列备注」）
+//   GET  /api/dept-note?bizType=xxx   → { notes: { [department]: note } }
+//   PUT  /api/dept-note               → body { bizType, department, note }
+//
+//   按「业务线 + 部门」唯一，**跨批次长期保留**（不跟日期走）：
+//   备注多是「这个部门这笔大单已开票」这类跟进说明，绑日期第二天就失效了。
+//   与 detail_note 分开存：那是按单据号、这是按部门，粒度不同不能混。
+// ------------------------------------------------------------
+router.get('/dept-note', async (req, res, next) => {
+  try {
+    const bizType = resolveBizType(req)
+    const { rows } = await query(
+      'SELECT department, note FROM dept_note WHERE biz_type = $1 AND note IS NOT NULL',
+      [bizType]
+    )
+    const notes = {}
+    for (const r of rows) notes[r.department] = r.note
+    res.json({ bizType, notes })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.put('/dept-note', requireRole(...CAN_EDIT_DETAIL), async (req, res, next) => {
+  try {
+    const bizType = req.body?.bizType
+    const department = String(req.body?.department ?? '').trim()
+    const text = typeof req.body?.note === 'string' ? req.body.note : ''
+
+    if (!BIZ_TYPES[bizType]) {
+      return res.status(400).json({ error: '缺少有效的业务类型' })
+    }
+    if (!department) {
+      return res.status(400).json({ error: '缺少部门' })
+    }
+    if (text.length > 500) {
+      return res.status(400).json({ error: '备注内容过长（最多 500 字）' })
+    }
+
+    const value = text.trim() ? text : null
+    if (value === null) {
+      await query('DELETE FROM dept_note WHERE biz_type = $1 AND department = $2', [bizType, department])
+    } else {
+      await query(
+        `INSERT INTO dept_note (biz_type, department, note, updated_at)
+         VALUES ($1, $2, $3, now())
+         ON CONFLICT (biz_type, department)
+         DO UPDATE SET note = EXCLUDED.note, updated_at = now()`,
+        [bizType, department, value]
+      )
+    }
+    res.json({ ok: true, bizType, department, note: value })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ------------------------------------------------------------
 // GET /api/export/detail  导出台账明细（当前筛选条件下的**全部**行）
 //   筛选条件与 /detail 完全共用，保证导出结果 = 页面所见
 //
