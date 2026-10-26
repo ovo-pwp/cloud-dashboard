@@ -191,6 +191,9 @@
             </template>
           </el-table-column>
         </el-table>
+        <!-- 2026-10-26 口径脚注：这行**要进导出图**（别加 no-export）。
+             图发给领导后没法当场解释「为什么比源表少几单」，把口径印在图上，图自己说明白。 -->
+        <div v-if="scopeNote" class="scope-foot">{{ scopeNote }}</div>
       </el-card>
 
       <!--
@@ -208,6 +211,23 @@
         🔴 进导出图（不挂 no-export）；表头深藏蓝 #2c3e50 + 白字；金额右对齐 + 千分位 + 2 位小数。
         🔴 **回款卡带「账龄」列**（2026-10-16 使用者「回款的是哪一个账龄的也写上去吧」）：同一客户可能跨多档，故汇总键含账龄；未开票新增恒为「当月」档，不带该列。
       -->
+      <!-- 2026-10-26 空状态：以前这两张卡没数据就整块不渲染，页面一片空白，
+           使用者会怀疑「是不是漏算了」（10-24 就发生过一次：当天确实没回款）。
+           现在明确告诉「今天没有变动」+ 怎么才会更新。 -->
+      <el-card v-if="!sumCards.length && !loading && summary.hasData" shadow="never" class="block-card empty-sum">
+        <div class="empty-sum-title">今日暂无变动</div>
+        <div class="empty-sum-tip">
+          {{
+            current === 'billed_unpaid'
+              ? '本批与上一批相比：没有新增的未回款单，也没有回款记录。'
+              : '本批与上一批相比：没有新增的已发货未开票单，也没有新开的票。'
+          }}
+        </div>
+        <div class="empty-sum-hint">
+          如果源表刚录入，等下一轮自动同步（整点）即可；也可让管理员手动触发同步。
+        </div>
+      </el-card>
+
       <el-card v-for="c in sumCards" :key="c.key" shadow="never" class="block-card">
         <template #header><span class="card-title">{{ c.title }}</span></template>
         <el-table
@@ -437,6 +457,23 @@ const matrixRows = computed(() => {
       total: round2(o.total),
     }))
     .sort((a, b) => b.total - a.total)
+})
+
+/**
+ * 口径脚注（2026-10-26）：印在矩阵下方，**会进导出图**。
+ * 使用者反复强调「口径必须说清」——图发出去以后没法当场解释，
+ * 所以把「剔了哪些、多少单、数据到哪天」直接写在图上。
+ */
+const scopeNote = computed(() => {
+  if (!summary.hasData) return ''
+  const excluded =
+    current.value === 'billed_unpaid'
+      ? '已剔除「财务平台开票」'
+      : '已剔除财务口径与「无效订单」'
+  const parts = [`统计口径：${excluded}`]
+  if (summary.invoiceCount) parts.push(`共 ${summary.invoiceCount} 单`)
+  if (summary.snapshotDate) parts.push(`数据截至 ${summary.snapshotDate}`)
+  return parts.join(' · ')
 })
 
 // 合计行：逐列求和（round2 已在上方统一定义）
@@ -811,6 +848,21 @@ async function exportImage() {
 /* .aging-* 样式随「账龄结构」卡一起删除（2026-10-13）—— 保留 @keyframes fadeRow 会被清理器报未使用，故一并删 */
 .strong { font-weight: 600; color: #f56c6c; }
 .card-hint { margin-left: 10px; font-size: 12px; color: #909399; }
+
+/* 口径脚注（2026-10-26）：右对齐小字，导出图底部会带上 */
+.scope-foot {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #909399;
+  text-align: right;
+  letter-spacing: 0.2px;
+}
+
+/* 汇总卡空状态（2026-10-26） */
+.empty-sum { text-align: center; padding: 26px 0 22px; }
+.empty-sum-title { font-size: 15px; font-weight: 600; color: #303133; }
+.empty-sum-tip { margin-top: 8px; font-size: 13px; color: #606266; }
+.empty-sum-hint { margin-top: 6px; font-size: 12px; color: #909399; }
 /* 明细表尾合计：加粗 + 深色，跟矩阵表的表尾一致（表尾是「数据」不是「注释」，所以不删） */
 .pay-detail :deep(.el-table__footer .cell) { font-weight: 700; color: #303133; }
 /* ---------- 业务员 × 账龄段 矩阵表 ---------- */
