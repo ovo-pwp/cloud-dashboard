@@ -245,8 +245,10 @@
             <template #default="{ row }"><span class="mx-amt">{{ num(row.amt) }}</span></template>
           </el-table-column>
           <!-- 2026-10-26 逐行备注：标「这笔是补单 / 红冲 / 正常回款」等。
-               键 = 卡片 + 部门 + 客户，存 ledger_note；不进导出图（发出去的是干净的数）。 -->
-          <el-table-column label="备注" min-width="180" class-name="no-export">
+               键 = 卡片 + 部门 + 客户，存 ledger_note。
+               🔴 2026-10-26 18:16 使用者「回款的备注需要导出图片显示出来」⇒ **去掉 no-export**，
+                  这列要进导出图。 -->
+          <el-table-column label="备注" min-width="160">
             <template #default="{ row }">
               <el-input
                 v-if="editingLedgerKey === ledgerKey(c.key, row.salesperson, row.customer_name)"
