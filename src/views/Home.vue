@@ -191,9 +191,6 @@
             </template>
           </el-table-column>
         </el-table>
-        <!-- 2026-10-26 口径脚注：这行**要进导出图**（别加 no-export）。
-             图发给领导后没法当场解释「为什么比源表少几单」，把口径印在图上，图自己说明白。 -->
-        <div v-if="scopeNote" class="scope-foot">{{ scopeNote }}</div>
       </el-card>
 
       <!--
@@ -457,23 +454,6 @@ const matrixRows = computed(() => {
       total: round2(o.total),
     }))
     .sort((a, b) => b.total - a.total)
-})
-
-/**
- * 口径脚注（2026-10-26）：印在矩阵下方，**会进导出图**。
- * 使用者反复强调「口径必须说清」——图发出去以后没法当场解释，
- * 所以把「剔了哪些、多少单、数据到哪天」直接写在图上。
- */
-const scopeNote = computed(() => {
-  if (!summary.hasData) return ''
-  const excluded =
-    current.value === 'billed_unpaid'
-      ? '已剔除「财务平台开票」'
-      : '已剔除财务口径与「无效订单」'
-  const parts = [`统计口径：${excluded}`]
-  if (summary.invoiceCount) parts.push(`共 ${summary.invoiceCount} 单`)
-  if (summary.snapshotDate) parts.push(`数据截至 ${summary.snapshotDate}`)
-  return parts.join(' · ')
 })
 
 // 合计行：逐列求和（round2 已在上方统一定义）
@@ -848,15 +828,6 @@ async function exportImage() {
 /* .aging-* 样式随「账龄结构」卡一起删除（2026-10-13）—— 保留 @keyframes fadeRow 会被清理器报未使用，故一并删 */
 .strong { font-weight: 600; color: #f56c6c; }
 .card-hint { margin-left: 10px; font-size: 12px; color: #909399; }
-
-/* 口径脚注（2026-10-26）：右对齐小字，导出图底部会带上 */
-.scope-foot {
-  margin-top: 10px;
-  font-size: 12px;
-  color: #909399;
-  text-align: right;
-  letter-spacing: 0.2px;
-}
 
 /* 汇总卡空状态（2026-10-26） */
 .empty-sum { text-align: center; padding: 26px 0 22px; }
