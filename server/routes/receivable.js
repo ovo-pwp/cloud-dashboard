@@ -1033,11 +1033,12 @@ router.put('/ledger-note', requireRole(...CAN_EDIT_DETAIL), async (req, res, nex
         [bizType, cardKey, department, customer]
       )
     } else {
+      // source='manual'：人工写过就永不被「每日自动标注」覆盖（见 services/autoNote.js）
       await query(
-        `INSERT INTO ledger_note (biz_type, card_key, department, customer, note, updated_at)
-         VALUES ($1,$2,$3,$4,$5,now())
+        `INSERT INTO ledger_note (biz_type, card_key, department, customer, note, source, updated_at)
+         VALUES ($1,$2,$3,$4,$5,'manual',now())
          ON CONFLICT (biz_type, card_key, department, customer)
-         DO UPDATE SET note = EXCLUDED.note, updated_at = now()`,
+         DO UPDATE SET note = EXCLUDED.note, source = 'manual', updated_at = now()`,
         [bizType, cardKey, department, customer, value]
       )
     }

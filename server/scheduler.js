@@ -28,6 +28,8 @@ import {
 } from './services/importer.js'
 // 每天备份一次数据库：历史快照不可再生（源表只有「当前状态」），丢了无法重建
 import { runBackup } from './services/dbBackup.js'
+// 「当日回款」自动标注：判断每笔是真回款 / 补录 / 源表删行（2026-10-27 使用者要求「每天都是这样」）
+import { refreshPayInfo, autoAnnotatePayments } from './services/autoNote.js'
 import {
   CUSTOMER_INVOICE_BIZ_TYPE,
   CUSTOMER_INVOICE_OUT_NAME,
@@ -235,6 +237,21 @@ async function importFile(tableSpec) {
           result.totalAmount.toLocaleString('en-US') + '（跳过 ' + result.skippedCount + ' 行）')
       if (result.warnings.length) {
         log('  ⚠ ' + result.warnings.length + ' 行账龄分档与总额不符')
+      }
+      // 「当日回款」自动标注：导入完才有新批次，此时 pay-info.json 也是刚拉的
+      if (tableSpec.bizType === 'billed_unpaid') {
+        try {
+          const pi = await refreshPayInfo()
+          const an = await autoAnnotatePayments('billed_unpaid')
+          if (an.skipped) {
+            log('  · 回款备注自动标注跳过：' + (an.reason || '') + (pi.reason ? ' / pay-info ' + pi.reason : ''))
+          } else {
+            log(`  ✓ 回款备注自动标注：写 ${an.written} 条、保留人工 ${an.keptManual} 条` +
+                (an.removed ? `（本批少了 ${an.removed} 单）` : '（本批无变动）'))
+          }
+        } catch (noteErr) {
+          errLog('  ⚠ 回款备注自动标注失败: ' + noteErr.message)
+        }
       }
     }
     return true
