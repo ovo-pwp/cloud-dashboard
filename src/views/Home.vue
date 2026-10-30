@@ -264,7 +264,9 @@
                 class="dept-note"
                 :class="{
                   'is-empty': !ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)],
-                  'is-warn': isAbnormalNote(ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)]),
+                  'is-normal': noteLevel(ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)]) === 'normal',
+                  'is-backfill': noteLevel(ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)]) === 'backfill',
+                  'is-bad': noteLevel(ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)]) === 'bad',
                 }"
                 :title="ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)] || '点击填写'"
                 @click="startLedgerEdit(ledgerKey(c.key, row.salesperson, row.customer_name))"
@@ -770,12 +772,18 @@ function cancelLedgerEdit() {
 }
 
 /**
- * 备注里是否含「非正常回款」——用于标橙色（2026-10-30：使用者「这里区分一下」）。
- * 正常回款写「正常回款 N 笔」用灰字，异常的（补录/删行/无记录/部分）用橙字，一眼能扫出来。
+ * 备注分三档（2026-10-30 使用者「补录的也区分开来」）：
+ *   normal   正常回款  → 灰
+ *   backfill 补录 / 部分回款 → 橙
+ *   bad      源表删行 / 无回款记录 / 日期异常 → 红
+ * 之前只做了「正常 vs 异常」两档，补录和删行同色，使用者要求分开。
  */
-function isAbnormalNote(note) {
+function noteLevel(note) {
   const s = String(note || '')
-  return /补录|删行|无回款|异常|只回|差 /.test(s)
+  if (!s) return ''
+  if (/删行|无回款|异常|作废/.test(s)) return 'bad'
+  if (/补录|只回|差 /.test(s)) return 'backfill'
+  return 'normal'
 }
 
 // 部门备注（矩阵用）— 2026-10-26 17:52 使用者澄清「不是总表」，矩阵不再显示，逻辑保留备用
@@ -934,8 +942,18 @@ async function exportImage() {
 }
 .dept-note:hover { background: #f4f6f8; }
 .dept-note.is-empty { color: #c0c4cc; }
-/* 异常备注（补录/删行/部分回款）标橙，正常回款为灰 —— 2026-10-30 */
-.dept-note.is-warn { color: #e6a23c; font-weight: 500; }
+/* 备注三档 —— 2026-10-30（正常/补录/删行 各一色，配合浅底色，扫一眼就能看出哪行要追） */
+.dept-note.is-normal { color: #909399; }
+.dept-note.is-backfill {
+  color: #d48806;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+}
+.dept-note.is-bad {
+  color: #cf1322;
+  background: #fff1f0;
+  border: 1px solid #ffa39e;
+}
 
 /* 汇总卡空状态（2026-10-26） */
 .empty-sum { text-align: center; padding: 26px 0 22px; }
