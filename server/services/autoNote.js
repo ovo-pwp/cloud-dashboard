@@ -112,43 +112,62 @@ export async function autoAnnotatePayments(bizType = 'billed_unpaid') {
   const infoMap = new Map(infos.map((x) => [x.doc_no, x]))
 
   // 4) 分类 + 按「部门 + 客户」聚合
+  //   2026-10-30 使用者「这里区分一下」：真回款不用逐单列（一个客户 6 笔全是真回款，
+  //   备注里塞 6 行「真回款」根本没法看），只写「正常回款 N 笔」；
+  //   异常的（补录 / 删行 / 无记录 / 部分）才列单号和金额。
   const groups = new Map()
   for (const r of removed) {
     const info = infoMap.get(r.doc_no)
-    let kind
-    let detail = ''
+    let kind = ''
+    let abnormal = false
     if (!info) {
       kind = '源表删行'
+      abnormal = true
     } else {
       const pd = normDate(info.pay_date)
       if (!pd) {
         kind = '无回款记录'
+        abnormal = true
       } else if (pd === cur.d) {
-        kind = '真回款'
+        kind = ''                              // 真回款 → 不单独列
       } else if (pd < cur.d) {
-        kind = '补录回款 ' + pd.slice(5).replace('-', '/')
+        kind = `补录 ${pd.slice(5).replace('-', '/')}`
+        abnormal = true
       } else {
         kind = '回款日期异常'
+        abnormal = true
       }
       // 部分回款：源表回款金额明显小于本批消失的金额
-      if (kind === '真回款' || kind.startsWith('补录')) {
+      if (abnormal && kind !== '无回款记录') {
         const diff = Number(r.amt) - Number(info.pay_amt || 0)
         if (diff > 0.01 && Number(info.pay_amt || 0) > 0) {
-          kind += `（部分 ${fmt(info.pay_amt)}）`
-          detail = ` 差 ${fmt(diff)}`
+          kind += `（只回 ${fmt(info.pay_amt)}，差 ${fmt(diff)}）`
         }
       }
     }
     const key = `${r.department || ''}\u0000${r.customer_name || ''}`
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key).push(`${r.doc_no} ${fmt(r.amt)} ${kind}${detail}`)
+    if (!groups.has(key)) groups.set(key, { normal: 0, normalAmt: 0, bad: [] })
+    const g = groups.get(key)
+    if (abnormal) g.bad.push(`${r.doc_no} ${fmt(r.amt)} ${kind}`)
+    else { g.normal++; g.normalAmt += Number(r.amt) }
+
   }
 
   // 5) 写库（只覆盖 source<>'manual' 的）
+  //   2026-10-30：先把本线所有 **auto** 备注清掉再重写。
+  //   不清的话，昨天那批的备注会残留（同一客户今天又出现时，看到的是昨天的判断），
+  //   而「当日回款」卡只反映本批，备注也必须只反映本批。人工备注（manual）不受影响。
+  await query(
+    `DELETE FROM ledger_note WHERE biz_type=$1 AND card_key='pay' AND source='auto'`,
+    [bizType]
+  )
   let written = 0
   let kept = 0
-  for (const [key, parts] of groups) {
+  for (const [key, g] of groups) {
     const [department, customer] = key.split('\u0000')
+    const parts = []
+    if (g.bad.length) parts.push(...g.bad)
+    if (g.normal) parts.push(`正常回款 ${g.normal} 笔 ${fmt(g.normalAmt)}`)
     const note = parts.join('；').slice(0, 500)
     const existing = (
       await query(

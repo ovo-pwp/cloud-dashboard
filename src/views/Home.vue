@@ -262,7 +262,11 @@
               <span
                 v-else
                 class="dept-note"
-                :class="{ 'is-empty': !ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)] }"
+                :class="{
+                  'is-empty': !ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)],
+                  'is-warn': isAbnormalNote(ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)]),
+                }"
+                :title="ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)] || '点击填写'"
                 @click="startLedgerEdit(ledgerKey(c.key, row.salesperson, row.customer_name))"
               >
                 {{ ledgerNotes[ledgerKey(c.key, row.salesperson, row.customer_name)] || '点击填写' }}
@@ -765,6 +769,15 @@ function cancelLedgerEdit() {
   editingLedgerKey.value = null
 }
 
+/**
+ * 备注里是否含「非正常回款」——用于标橙色（2026-10-30：使用者「这里区分一下」）。
+ * 正常回款写「正常回款 N 笔」用灰字，异常的（补录/删行/无记录/部分）用橙字，一眼能扫出来。
+ */
+function isAbnormalNote(note) {
+  const s = String(note || '')
+  return /补录|删行|无回款|异常|只回|差 /.test(s)
+}
+
 // 部门备注（矩阵用）— 2026-10-26 17:52 使用者澄清「不是总表」，矩阵不再显示，逻辑保留备用
 const deptNotes = ref({})
 
@@ -921,6 +934,8 @@ async function exportImage() {
 }
 .dept-note:hover { background: #f4f6f8; }
 .dept-note.is-empty { color: #c0c4cc; }
+/* 异常备注（补录/删行/部分回款）标橙，正常回款为灰 —— 2026-10-30 */
+.dept-note.is-warn { color: #e6a23c; font-weight: 500; }
 
 /* 汇总卡空状态（2026-10-26） */
 .empty-sum { text-align: center; padding: 26px 0 22px; }
