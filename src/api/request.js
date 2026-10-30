@@ -57,9 +57,14 @@ request.interceptors.response.use(
       error.code === 'ECONNABORTED' || (!error.response && !error.code?.startsWith('ERR_CANCELED'))
     const isGet = cfg && String(cfg.method || '').toLowerCase() === 'get'
     const tried = cfg?.__retryCount ?? 0
-    if (isGet && transient && tried < 2) {
+    // 2026-10-30：退避从 400/800ms 改成 1s/3s/6s、重试 3 次。
+    // 原参数来不及等隧道恢复：看门狗日志显示一次抖动通常持续 5~20 秒
+    //（10-30 15:15 超时 25.9s、15:20 才恢复），400ms 打两枪就放弃了，
+    // 用户看到的就是「无法连接后端服务」整页灰。
+    if (isGet && transient && tried < 3) {
       cfg.__retryCount = tried + 1
-      await new Promise((r) => setTimeout(r, 400 * cfg.__retryCount)) // 400ms → 800ms 退避
+      const wait = [1000, 3000, 6000][tried] ?? 6000
+      await new Promise((r) => setTimeout(r, wait))
       return request(cfg)
     }
 
