@@ -40,6 +40,12 @@ function tokenFrom(x) {
   return i >= 1 ? x.slice(0, i + 1) : null
 }
 
+/** 广西 14 个地级市（2026-10-31：源表「地区」列常只写城市名、不带「市」） */
+const GX_CITY_NAMES = [
+  '南宁', '柳州', '桂林', '梧州', '北海', '防城港',
+  '钦州', '贵港', '玉林', '百色', '贺州', '河池', '来宾', '崇左',
+]
+
 /** 去掉开头的省级前缀（剥完还剩不下东西就说明剥过头了，返回原串由调用方兜底） */
 function stripProvince(s) {
   const full = s.replace(PROV_FULL, '')
@@ -69,6 +75,18 @@ export function toCity(raw, known) {
   // 前缀噪声：「中国（广西）自由贸易试验区…」这类
   const s = s0.replace(/^中国（[^）]*）/, '').replace(/^自由贸易试验区/, '')
 
+  // ①-0 2026-10-31：未开票线的「地区」把非广西的单写成 `其他-深圳` / `其他-杭州`，
+  // 而同一个人在未回款线的地址里是 `深圳市` ⇒ 下拉里两条线各一套、「按城市筛」筛不全。
+  // 这里剥掉「其他-」前缀再归一，非广西城市会落成 `深圳市`，照样能看出是外地。
+  const mOther = s.match(/^其他[-－—\s]+(.+)$/)
+  if (mOther) {
+    const inner = mOther[1].trim()
+    const t0 = tokenFrom(inner)
+    if (t0) return t0
+    if (GX_CITY_NAMES.includes(inner.replace(/市$/, ''))) return inner.replace(/市$/, '') + '市'
+    return inner.endsWith('市') ? inner : inner + '市'
+  }
+
   // ① 剥省级前缀 → 取到第一个「市」
   const a = tokenFrom(stripProvince(s))
   if (a) return a
@@ -76,6 +94,12 @@ export function toCity(raw, known) {
   // 剥过头了（「上海市」被剥成「市」）→ 拿没剥过的原串再试一次
   const b = tokenFrom(s)
   if (b) return b
+
+  // ①-2 2026-10-31：源表「地区」列直接写城市名且**不带「市」**（`南宁` / `百色`）。
+  // 不加这条会出现同一个城市两个选项：未回款线的「地址辅助」是完整地址 → 归一成「南宁市」，
+  // 未开票线的「地区」是「南宁」→ 原样返回，筛选下拉里就成了「南宁市」和「南宁」并存。
+  const bare = s.replace(/市$/, '').trim()
+  if (GX_CITY_NAMES.includes(bare)) return bare + '市'
 
   // ② 没有「市」→ 看串里有没有已知城市名（长的优先，「防城港市」先于「城港市」）
   if (known && known.size) {
