@@ -44,8 +44,13 @@
           <span v-if="summary.skippedCount > 0">
             导入时跳过 <b>{{ summary.skippedCount }}</b> 行脏数据（分类为空且账龄分档全为 0）
           </span>
-          <span v-if="summary.warnCount > 0">
-            <b>{{ summary.warnCount }}</b> 行账龄分档与总额不符，已在明细分页中标记
+          <span v-if="summary.warnAgingCount > 0">
+            <b>{{ summary.warnAgingCount }}</b> 行账龄分档与总额不符，已在明细分页中标记
+          </span>
+          <!-- 2026-11-03：源表日期为空是另一种问题，账龄只能按最长档兜底，
+               不能说成「分档与总额不符」（文案误导，用户会以为数字错了）。 -->
+          <span v-if="summary.warnDateCount > 0">
+            <b>{{ summary.warnDateCount }}</b> 行源表日期为空（账龄已按最长档暂记），已在明细分页中标记
           </span>
         </div>
       </el-alert>

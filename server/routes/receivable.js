@@ -385,7 +385,12 @@ function summaryAggSql() {
       COALESCE(SUM(amount_2m), 0)              AS m2,
       COALESCE(SUM(amount_1m), 0)              AS m1,
       COALESCE(SUM(amount_current), 0)         AS current_month,
-      COUNT(*) FILTER (WHERE data_warning IS NOT NULL) AS warn_count
+      COUNT(*) FILTER (WHERE data_warning IS NOT NULL) AS warn_count,
+      -- 2026-11-03：data_warning 有两种含义（账龄分档≠总额 / 源表日期无效），
+      -- 之前前端只按 warnCount 显示「账龄分档与总额不符」，会把「日期无效」也说成分档不符 ⇒ 文案误导。
+      -- 这里分开统计，前端分别说明。
+      COUNT(*) FILTER (WHERE data_warning IS NOT NULL AND data_warning NOT LIKE '日期无效%') AS warn_aging_count,
+      COUNT(*) FILTER (WHERE data_warning LIKE '日期无效%') AS warn_date_count
     FROM receivable_detail WHERE `
 }
 
@@ -563,6 +568,8 @@ router.get('/summary', async (req, res, next) => {
       currentMonth: r.current_month,
       over3mRatio: r.total > 0 ? r.over3m / r.total : 0,
       warnCount: r.warn_count,
+      warnAgingCount: Number(r.warn_aging_count || 0),
+      warnDateCount: Number(r.warn_date_count || 0),
       skippedCount: Number(batch.skipped_count),
       /** 单均金额放后端算，保证「本期」和「上期」用同一个公式 */
       avgAmount: r.doc_count > 0 ? r.total / r.doc_count : null,
