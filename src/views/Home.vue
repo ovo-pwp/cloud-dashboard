@@ -231,8 +231,21 @@
       </el-card>
 
       <el-card v-for="c in sumCards" :key="c.key" shadow="never" class="block-card">
-        <template #header><span class="card-title">{{ c.title }}</span></template>
+        <template #header>
+          <span class="card-title">{{ c.title }}</span>
+          <!-- 2026-11-04 使用者「开票多的就不展示了」：行数太多时收起整张表，只留条数+金额 -->
+          <span v-if="c.tooMany" class="card-hint">
+            {{ c.count }} 条 · 合计 {{ num(c.amt) }}
+          </span>
+        </template>
+        <!-- 行数过多：不再渲染明细表（概览页被拉得很长、导出图也跟着变竖条）。
+             完整明细在「每日发货·回款」页（发货块里有「已开票」分组），不会丢。 -->
+        <div v-if="c.tooMany" class="too-many-tip">
+          明细 {{ c.count }} 行已收起
+          <el-button link type="primary" size="small" @click="goInvoiceDaily">去「每日发货·回款」页查看</el-button>
+        </div>
         <el-table
+          v-else
           :data="c.rows"
           border
           class="pay-detail"
@@ -291,6 +304,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { toPng } from 'html-to-image'
 import { captureWithFullWidth } from '@/utils/exportSize'
@@ -301,6 +315,7 @@ import { getSummary, getAgingBySalesperson, getLineDelta, getLedgerNotes, update
 import PageHeader from '@/components/PageHeader.vue'
 
 const biz = useBizStore()
+const router = useRouter()
 const { current } = storeToRefs(biz)
 
 const loading = ref(false)
@@ -596,11 +611,32 @@ const sumCards = computed(() => {
     const invRows = bySpCustomer(uninvoicedRemoved.value, { withAging: true })
     const cards = []
     if (addRows.length) cards.push({ key: 'uninv-add', title: '当日新增的未开票 · 按部门 / 客户', rows: addRows, withAging: false })
-    if (invRows.length) cards.push({ key: 'uninv-inv', title: '当日已开票 · 按部门 / 客户', rows: invRows, withAging: true })
+    if (invRows.length) {
+      // 2026-11-04 使用者「开票多的就不展示了」：开票明细动辄几十行，
+      // 把概览页拉得很长、导出图也变成竖条 ⇒ 超过阈值就只留条数+金额，
+      // 完整明细去「每日发货·回款」页（发货块里有「已开票」分组）。
+      if (invRows.length > MAX_SUM_ROWS) {
+        const amt = invRows.reduce((a, r) => a + Number(r.amt || 0), 0)
+        const cnt = invRows.reduce((a, r) => a + Number(r.count || 0), 0)
+        cards.push({
+          key: 'uninv-inv', title: '当日已开票 · 按部门 / 客户',
+          rows: [], withAging: true, tooMany: true, count: cnt, amt: round2(amt),
+        })
+      } else {
+        cards.push({ key: 'uninv-inv', title: '当日已开票 · 按部门 / 客户', rows: invRows, withAging: true })
+      }
+    }
     return cards
   }
   return []
 })
+
+/** 汇总卡行数上限：超过就不渲染明细表（2026-11-04 使用者「开票多的就不展示了」） */
+const MAX_SUM_ROWS = 12
+
+function goInvoiceDaily() {
+  router.push('/invoice-daily')
+}
 
 /** 汇总卡表尾合计：业务员列写「合计」，张数 / 金额 按列求和（用 col.property，不按列序猜） */
 function summaryByProp({ columns, data }) {
@@ -961,6 +997,13 @@ async function exportImage() {
 }
 
 /* 汇总卡空状态（2026-10-26） */
+/* 行数过多时收起的提示（2026-11-04） */
+.too-many-tip {
+  text-align: center;
+  padding: 14px 0 12px;
+  font-size: 13px;
+  color: #909399;
+}
 .empty-sum { text-align: center; padding: 26px 0 22px; }
 .empty-sum-title { font-size: 15px; font-weight: 600; color: #303133; }
 .empty-sum-tip { margin-top: 8px; font-size: 13px; color: #606266; }
