@@ -1055,6 +1055,71 @@ router.put('/ledger-note', requireRole(...CAN_EDIT_DETAIL), async (req, res, nex
   }
 })
 
+// ------------------------------------------------------------
+// GET /api/freshness  数据新鲜度（2026-11-12 加）
+//
+// 为什么需要：凭证失效 / 抓取失败时，看板不会报错，只是**默默显示旧数据**。
+//   2026-11-12 就出现过 13:00 停到 18:52 才被人发现——期间所有数字都是旧的，
+//   而且看上去一切正常（这是最危险的状态：数字不对但不报错）。
+//   这里给出「最近一次成功同步」的时间和「最近一次失败的原因」，
+//   前端据此在页面顶部提示，让人一眼知道数据是不是新鲜的。
+// ------------------------------------------------------------
+router.get('/freshness', async (req, res, next) => {
+  try {
+    const lastOk = (
+      await query(
+        `SELECT finished_at, trigger FROM sync_run
+          WHERE ok = true AND finished_at IS NOT NULL
+          ORDER BY finished_at DESC LIMIT 1`
+      )
+    ).rows[0]
+    const lastRun = (
+      await query(
+        `SELECT ok, step, message, finished_at, trigger FROM sync_run
+          WHERE finished_at IS NOT NULL
+          ORDER BY finished_at DESC LIMIT 1`
+      )
+    ).rows[0]
+    // 连续失败次数（从最新往回数，遇到成功就停）
+    const recent = (
+      await query(
+        `SELECT ok FROM sync_run WHERE finished_at IS NOT NULL
+          ORDER BY finished_at DESC LIMIT 20`
+      )
+    ).rows
+    let fails = 0
+    for (const r of recent) {
+      if (r.ok) break
+      fails++
+    }
+
+    const hoursSinceOk = lastOk
+      ? (Date.now() - new Date(lastOk.finished_at).getTime()) / 3600000
+      : null
+    // 阈值：正常每小时同步一次；超过 3 小时没成功基本就是出事了
+    const STALE_HOURS = 3
+    const stale = hoursSinceOk === null || hoursSinceOk > STALE_HOURS
+
+    res.json({
+      lastOkAt: lastOk?.finished_at || null,
+      lastOkTrigger: lastOk?.trigger || null,
+      hoursSinceOk: hoursSinceOk === null ? null : Math.round(hoursSinceOk * 10) / 10,
+      lastRunOk: lastRun?.ok ?? null,
+      lastRunAt: lastRun?.finished_at || null,
+      lastMessage: lastRun?.message || '',
+      consecutiveFails: fails,
+      stale,
+      staleThresholdHours: STALE_HOURS,
+      // 兼容 PageHeader 的旧字段（它读 lastSyncAt / ok / running）
+      lastSyncAt: lastRun?.finished_at || null,
+      ok: lastRun?.ok ?? null,
+      running: !!getSyncState({ withLog: false }).running,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
 router.put(
   '/detail/reminder',
   requireRole(...CAN_EDIT_DETAIL),
@@ -2142,18 +2207,12 @@ router.get('/sync/runs', requireRole(ROLE_ADMIN), async (req, res, next) => {
 //   ok          上次是否成功
 //   running     是否正在同步
 // ------------------------------------------------------------
-router.get('/freshness', async (req, res, next) => {
-  try {
-    const st = getSyncState({ withLog: false })
-    res.json({
-      lastSyncAt: st.finishedAt || null,
-      ok: !!st.ok,
-      running: !!st.running,
-    })
-  } catch (err) {
-    next(err)
-  }
-})
+// ------------------------------------------------------------
+// GET /api/freshness 已在上方（2026-11-12 增强版）实现：
+// 返回 lastSyncAt / ok / running（PageHeader 用）+ hoursSinceOk / lastMessage /
+// consecutiveFails / stale（Home 顶部大提示用）。此处不再重复定义，
+// 否则后注册的路由不会生效、且两处字段不一致。
+// ------------------------------------------------------------
 
 // ------------------------------------------------------------
 // GET /api/priority/actions  待处理优先级清单（只读，独立新接口）

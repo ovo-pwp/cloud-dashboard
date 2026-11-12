@@ -29,6 +29,30 @@
     </el-empty>
 
     <template v-else>
+      <!-- 数据陈旧提示（2026-11-12）：凭证失效/抓取失败时看板不报错、只是显示旧数据，
+           这是最危险的状态。超过阈值没成功同步就在这里红字提醒。
+           刻意放在「数据质量提示」之上，因为数据旧比数据脏更严重。 -->
+      <el-alert
+        v-if="freshness && freshness.stale"
+        type="error"
+        :closable="false"
+        show-icon
+        class="warn-alert"
+      >
+        <template #title>
+          数据已 {{ freshness.hoursSinceOk === null ? '很久' : freshness.hoursSinceOk.toFixed(1) + ' 小时' }}未更新
+          <span v-if="freshness.consecutiveFails > 0">（已连续失败 {{ freshness.consecutiveFails }} 次）</span>
+        </template>
+        <div class="warn-body">
+          <span v-if="freshness.lastOkAt">
+            最后一次成功同步：{{ fmtTime(freshness.lastOkAt) }}
+          </span>
+          <span v-if="freshness.lastMessage" class="fresh-reason">
+            {{ shortReason(freshness.lastMessage) }}
+          </span>
+        </div>
+      </el-alert>
+
       <!-- 数据质量提示 -->
       <el-alert
         v-if="summary.warnCount > 0 || summary.skippedCount > 0"
@@ -311,7 +335,7 @@ import { captureWithFullWidth } from '@/utils/exportSize'
 import { storeToRefs } from 'pinia'
 import { useBizStore } from '@/stores/biz'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { getSummary, getAgingBySalesperson, getLineDelta, getLedgerNotes, updateLedgerNote } from '@/api'
+import { getSummary, getAgingBySalesperson, getLineDelta, getLedgerNotes, updateLedgerNote, getFreshness } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 
 const biz = useBizStore()
@@ -732,6 +756,8 @@ async function loadAll(silent) {
     salespersonList.value = bysp.records || []
     // 汇总卡逐行备注（与主体数据并行，失败不影响看板）
     loadLedgerNotes()
+    // 数据新鲜度（凭证失效/抓取失败时页面顶部提示）
+    loadFreshness()
 
     // 「当日新增 / 回款明细」：只未回款线拉一次（复用 line-delta，不是新增后端负担）。
     // 切到未开票线时显式置 null ⇒ 两张表都不渲染（使用者 10-14：「开票的先不要」）。
@@ -810,6 +836,33 @@ async function saveLedgerNote(k, meta) {
 
 function cancelLedgerEdit() {
   editingLedgerKey.value = null
+}
+
+// 数据新鲜度（2026-11-12）：超过 3 小时没成功同步就红字提示
+const freshness = ref(null)
+async function loadFreshness() {
+  try {
+    freshness.value = await getFreshness()
+  } catch {
+    freshness.value = null
+  }
+}
+
+/** 把「2026-11-12T18:56:28+08」显示成「11-12 18:56」 */
+function fmtTime(s) {
+  if (!s) return ''
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return String(s).slice(0, 16).replace('T', ' ')
+  const p = (n) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** 失败原因压成一句话，避免长文案撑高提示框 */
+function shortReason(msg) {
+  const s = String(msg || '')
+  if (/凭证|Token|400006|已撤销/i.test(s)) return '原因：金山文档凭证已失效，需要重新获取 Token'
+  if (/抓取失败|网络/.test(s)) return '原因：云端抓取失败（凭证失效或网络不通）'
+  return s.slice(0, 80)
 }
 
 /**
@@ -997,6 +1050,8 @@ async function exportImage() {
 }
 
 /* 汇总卡空状态（2026-10-26） */
+/* 数据陈旧提示里的原因一行（2026-11-12） */
+.fresh-reason { color: #cf1322; }
 /* 行数过多时收起的提示（2026-11-04） */
 .too-many-tip {
   text-align: center;
