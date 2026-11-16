@@ -191,7 +191,17 @@ function pull(withReports = true) {
         log('拉取部分失败（仍有部分表可能已更新）')
         resolve({ ok: true }) // 允许部分成功
       } else if (code) {
-        const reason = { 3: '无凭证', 4: '连不上服务', 5: '凭证失效' }[code] || ('exit=' + code)
+        // 2026-11-16：3221225786 = 0xC000013A（STATUS_CONTROL_C_EXIT）。
+        // 实测不是「被谁 Ctrl+C」，而是**内存不足时进程被系统直接终止**：
+        // 本机 15.8G 物理内存、提交量常年 22G+，可用只剩 1~2G 时 Python 一启动就死，
+        // 表现为「只跑 2 秒、没有任何输出、exit=3221225786」。下一轮内存够了就自己好。
+        const reason =
+          {
+            3: '无凭证',
+            4: '连不上服务',
+            5: '凭证失效',
+            3221225786: '进程被系统终止（多半是内存不足，通常下一轮自动恢复）',
+          }[code] || 'exit=' + code
         errLog('拉取失败: ' + reason)
         resolve({ ok: false })
       } else {
