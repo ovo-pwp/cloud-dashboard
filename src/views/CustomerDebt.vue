@@ -37,7 +37,7 @@
       <template #header>
         <span class="card-title">客户明细（{{ rows.length }}）</span>
         <span class="card-hint">
-          反馈合并：看板「进度反馈」（可点开填写）＋ 源表 Excel「沟通回款进度」
+          数据全部来自利润管控系统（每天自动取数后在系统内汇总）；产品线＝已发货未开票按产品线拆分
         </span>
       </template>
       <el-table
@@ -52,11 +52,22 @@
         <el-table-column prop="dept" label="部门" width="110" show-overflow-tooltip />
         <el-table-column prop="salesperson" label="业务员" width="95" show-overflow-tooltip />
 
+        <el-table-column prop="contract_count" label="合同数" width="80" align="right" />
+        <el-table-column prop="ship_amount" label="实际出库金额" width="140" align="right">
+          <template #default="{ row }"><span class="mx-amt">{{ num(row.ship_amount) }}</span></template>
+        </el-table-column>
         <el-table-column label="已发货未开票" width="150" align="right">
           <template #default="{ row }">
             <span class="mx-amt">{{ num(row.uninvoiced_amount) }}</span>
             <span class="mx-sub">{{ row.uninvoiced_count || 0 }} 单</span>
           </template>
+        </el-table-column>
+        <el-table-column prop="invoice_count" label="开票方案数" width="95" align="right" />
+        <el-table-column prop="invoiced_amount" label="开票金额" width="140" align="right">
+          <template #default="{ row }"><span class="mx-amt">{{ num(row.invoiced_amount) }}</span></template>
+        </el-table-column>
+        <el-table-column prop="paid_amount" label="回款金额" width="140" align="right">
+          <template #default="{ row }"><span class="mx-amt">{{ num(row.paid_amount) }}</span></template>
         </el-table-column>
         <el-table-column label="已开票未回款" width="150" align="right">
           <template #default="{ row }">

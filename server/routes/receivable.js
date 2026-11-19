@@ -2576,7 +2576,14 @@ router.get('/customer-debt', async (req, res, next) => {
     if (only === 'unpaid') where.push(`live.unpaid_amount > 0`)
     const whereSql = where.length ? ' AND ' + where.join(' AND ') : ''
 
-    // ① 实时应收（按客户汇总）+ ② 产品线拆分 + ③ 两处销售反馈
+    // ① 实时应收（按客户汇总）+ ② 源表补充信息 + ③ 销售反馈
+    // 数据源全部来自「利润管控系统」多维表格（2026-11-19 使用者定案：
+    // 「数据每天从利润管控系统里面取数，然后在这里面汇总起来」）：
+    //   receivable_detail  ← 已开票未回款 / 已发货未开票（单据级，最新批次）
+    //   customer_recon     ← 客户对账明细表(123)：合同数、实际出库金额、**产品线**
+    //   customer_invoice   ← 客户开票明细表(26)：开票方案数、开票金额、回款金额
+    //   detail_note        ← 销售在看板里填的进度反馈
+    //   customer_debt_product ← 手工 Excel（**只取**销售写的沟通进度/备注，不取金额）
     const rows = await query(
       `WITH live AS (
          SELECT d.customer_name,
@@ -2587,11 +2594,33 @@ router.get('/customer-debt', async (req, res, next) => {
                 COUNT(DISTINCT CASE WHEN d.biz_type = 'shipped_uninvoiced' THEN d.doc_no END)        AS uninvoiced_count,
                 SUM(CASE WHEN d.biz_type = 'billed_unpaid' THEN d.amount_total ELSE 0 END)           AS unpaid_amount,
                 SUM(CASE WHEN d.biz_type = 'billed_unpaid' THEN d.amount_over3m ELSE 0 END)          AS unpaid_over3m,
-                COUNT(DISTINCT CASE WHEN d.biz_type = 'billed_unpaid' THEN d.doc_no END)             AS unpaid_count,
-                MAX(CASE WHEN d.biz_type = 'billed_unpaid' THEN d.amount_over3m ELSE 0 END)           AS max_over3m
+                COUNT(DISTINCT CASE WHEN d.biz_type = 'billed_unpaid' THEN d.doc_no END)             AS unpaid_count
            FROM receivable_detail d
           WHERE d.batch_id IN ($1, $2)
           GROUP BY 1, 2, 3
+       ),
+       rc AS (   -- 客户对账明细表(123)：合同数 / 实际出库 / 产品线（已发货未开票口径）
+         SELECT customer,
+                COUNT(DISTINCT contract_no)::int AS contract_count,
+                COALESCE(SUM(ship_amount), 0)::float8 AS ship_amount,
+                COALESCE(SUM(CASE WHEN product_line = '立减金' THEN uninvoiced_amount ELSE 0 END), 0)::float8 AS pl_lijianjin,
+                COALESCE(SUM(CASE WHEN product_line = '营销礼品' THEN uninvoiced_amount ELSE 0 END), 0)::float8 AS pl_marketing_gift,
+                COALESCE(SUM(CASE WHEN product_line = '活动策划' THEN uninvoiced_amount ELSE 0 END), 0)::float8 AS pl_activity,
+                COALESCE(SUM(CASE WHEN product_line = '现代服务' THEN uninvoiced_amount ELSE 0 END), 0)::float8 AS pl_modern_service,
+                COALESCE(SUM(CASE WHEN product_line = '渠道营销产品' THEN uninvoiced_amount ELSE 0 END), 0)::float8 AS pl_channel,
+                COALESCE(SUM(CASE WHEN product_line = '自营场外引流订单' THEN uninvoiced_amount ELSE 0 END), 0)::float8 AS pl_outbound,
+                COALESCE(SUM(CASE WHEN product_line = '软件' THEN uninvoiced_amount ELSE 0 END), 0)::float8 AS pl_software,
+                COALESCE(SUM(CASE WHEN product_line = '场景获客' THEN uninvoiced_amount ELSE 0 END), 0)::float8 AS pl_scene
+           FROM customer_recon
+          GROUP BY 1
+       ),
+       iv AS (   -- 客户开票明细表(26)：开票方案数 / 开票金额 / 回款金额
+         SELECT customer,
+                COUNT(DISTINCT plan_no)::int AS invoice_count,
+                COALESCE(SUM(invoice_amount), 0)::float8 AS invoiced_amount,
+                COALESCE(SUM(pay_amount), 0)::float8 AS paid_amount
+           FROM customer_invoice
+          GROUP BY 1
        ),
        fb AS (   -- 看板里销售填的「进度反馈」：按客户取最新一条
          SELECT d2.customer_name, n.biz_type, n.doc_no, n.note, n.updated_at,
@@ -2612,18 +2641,31 @@ router.get('/customer-debt', async (req, res, next) => {
        )
        SELECT live.customer_name, live.dept, live.salesperson,
               live.uninvoiced_amount, live.uninvoiced_over3m, live.uninvoiced_count,
-              live.unpaid_amount, live.unpaid_over3m, live.unpaid_count, live.max_over3m,
+              live.unpaid_amount, live.unpaid_over3m, live.unpaid_count,
               (COALESCE(live.uninvoiced_amount,0) + COALESCE(live.unpaid_amount,0)) AS total_receivable,
-              cp.pl_lijianjin, cp.pl_marketing_gift, cp.pl_activity, cp.pl_modern_service,
-              cp.pl_channel, cp.pl_outbound, cp.pl_software, cp.pl_scene, cp.pl_check,
-              cp.remark AS excel_remark, cp.progress_note AS excel_progress,
+              COALESCE(rc.contract_count, 0)::int      AS contract_count,
+              COALESCE(rc.ship_amount, 0)::float8      AS ship_amount,
+              COALESCE(iv.invoice_count, 0)::int       AS invoice_count,
+              COALESCE(iv.invoiced_amount, 0)::float8   AS invoiced_amount,
+              COALESCE(iv.paid_amount, 0)::float8       AS paid_amount,
+              COALESCE(rc.pl_lijianjin, 0)::float8      AS pl_lijianjin,
+              COALESCE(rc.pl_marketing_gift, 0)::float8 AS pl_marketing_gift,
+              COALESCE(rc.pl_activity, 0)::float8       AS pl_activity,
+              COALESCE(rc.pl_modern_service, 0)::float8 AS pl_modern_service,
+              COALESCE(rc.pl_channel, 0)::float8        AS pl_channel,
+              COALESCE(rc.pl_outbound, 0)::float8       AS pl_outbound,
+              COALESCE(rc.pl_software, 0)::float8       AS pl_software,
+              COALESCE(rc.pl_scene, 0)::float8          AS pl_scene,
+              xl.remark AS excel_remark, xl.progress_note AS excel_progress,
               fb.note AS board_note, fb.updated_at AS board_note_at,
-              COALESCE(fb.doc_no, rep.doc_no)   AS note_doc_no,
+              COALESCE(fb.doc_no, rep.doc_no)     AS note_doc_no,
               COALESCE(fb.biz_type, rep.biz_type) AS note_biz_type
          FROM live
-         LEFT JOIN customer_debt_product cp
-                ON cp.customer_name = live.customer_name
-               AND cp.snapshot_date = (SELECT MAX(snapshot_date) FROM customer_debt_product)
+         LEFT JOIN rc ON rc.customer = live.customer_name
+         LEFT JOIN iv ON iv.customer = live.customer_name
+         LEFT JOIN customer_debt_product xl
+                ON xl.customer_name = live.customer_name
+               AND xl.snapshot_date = (SELECT MAX(snapshot_date) FROM customer_debt_product)
          LEFT JOIN fb ON fb.customer_name = live.customer_name AND fb.rn = 1
          LEFT JOIN rep ON rep.customer_name = live.customer_name AND rep.rn = 1
         WHERE 1=1 ${whereSql}
