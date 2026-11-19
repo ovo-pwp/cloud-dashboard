@@ -1,7 +1,6 @@
 <template>
   <div class="container">
-    <PageHeader title="客户欠款 · 客户视图" :sub="subText" />
-
+    <!-- 2026-11-19 使用者定案：这一页不要页头、不要产品线分布表，只要明细 -->
     <!-- 汇总 -->
     <el-row :gutter="12" class="sum-row">
       <el-col v-for="c in sumCards" :key="c.label" :span="6">
@@ -33,34 +32,6 @@
       <span class="filter-tip">
         应收数据为实时同步（每小时）；产品线拆分为手工表（6 小时一次）；销售反馈两处合并
       </span>
-    </el-card>
-
-    <!-- 产品线分布 -->
-    <el-card shadow="never" class="block-card">
-      <template #header><span class="card-title">产品线欠款分布</span></template>
-      <el-table
-        :data="productLines"
-        border
-        size="small"
-        :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
-        :cell-style="{ padding: '6px 0' }"
-      >
-        <el-table-column prop="label" label="产品线" width="180" />
-        <el-table-column label="欠款金额（元）" min-width="160" align="right">
-          <template #default="{ row }">
-            <span class="mx-amt">{{ num(row.amount) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="customerCount" label="客户数" width="110" align="right" />
-        <el-table-column label="占合计应收" width="150" align="right">
-          <template #default="{ row }">
-            <span v-if="summary && summary.totalReceivable">
-              {{ ((row.amount / summary.totalReceivable) * 100).toFixed(1) }}%
-            </span>
-            <span v-else>—</span>
-          </template>
-        </el-table-column>
-      </el-table>
     </el-card>
 
     <!-- 明细 -->
@@ -148,23 +119,15 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { getCustomerDebt } from '@/api'
-import PageHeader from '@/components/PageHeader.vue'
 
 const q = ref('')
 const dept = ref('')
 const onlyUnpaid = ref(false)
 
-const snapshotDate = ref(null)
 const summary = ref(null)
-const productLines = ref([])
 const productLineMeta = ref([])
 const rows = ref([])
 const depts = ref([])
-
-const subText = computed(() => {
-  if (!snapshotDate.value) return '应收数据实时同步；产品线拆分为手工表；销售反馈两处合并'
-  return `应收数据 ${snapshotDate.value}（每小时同步）　｜　产品线拆分 6 小时一次　｜　销售反馈＝看板进度反馈 + 源表沟通进度`
-})
 
 const sumCards = computed(() => {
   const s = summary.value
@@ -209,9 +172,7 @@ async function load() {
   if (onlyUnpaid.value) params.only = 'unpaid'
   try {
     const d = await getCustomerDebt(params)
-    snapshotDate.value = d.snapshotDate
     summary.value = d.summary
-    productLines.value = d.productLines || []
     productLineMeta.value = d.productLineMeta || []
     rows.value = d.rows || []
     depts.value = d.depts || []
