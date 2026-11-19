@@ -18,20 +18,18 @@
         v-model="q"
         placeholder="客户名"
         clearable
-        style="width:220px"
+        style="width:200px"
         @keyup.enter="load"
         @clear="load"
       />
-      <el-select v-model="dept" placeholder="全部部门" clearable style="width:150px" @change="load">
+      <el-select v-model="dept" placeholder="全部部门" clearable style="width:140px" @change="load">
         <el-option v-for="d in depts" :key="d" :label="d" :value="d" />
       </el-select>
       <el-button size="small" :type="onlyUnpaid ? 'primary' : ''" @click="toggleOnly">
         {{ onlyUnpaid ? '✓ ' : '' }}只看有未回款
       </el-button>
       <el-button size="small" @click="load">刷新</el-button>
-      <span class="filter-tip">
-        应收数据为实时同步（每小时）；产品线拆分为手工表（6 小时一次）；销售反馈两处合并
-      </span>
+      <span class="filter-tip">表头右侧 ▼ 可按「逾期」「金额」「销售反馈」筛选</span>
     </el-card>
 
     <!-- 明细 -->
@@ -39,41 +37,59 @@
       <template #header>
         <span class="card-title">客户明细（{{ rows.length }}）</span>
         <span class="card-hint">
-          反馈列合并：看板「进度反馈」+ 源表 Excel「沟通回款进度」
+          反馈合并：看板「进度反馈」（可点开填写）＋ 源表 Excel「沟通回款进度」
         </span>
       </template>
       <el-table
         :data="rows"
         border
         size="small"
-        max-height="620"
+        max-height="640"
         :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
         :cell-style="{ padding: '6px 0' }"
       >
-        <el-table-column prop="customer_name" label="挂账客户" min-width="230" fixed="left" show-overflow-tooltip />
-        <el-table-column prop="dept" label="部门" width="120" show-overflow-tooltip />
-        <el-table-column prop="salesperson" label="业务员" width="100" show-overflow-tooltip />
+        <el-table-column prop="customer_name" label="挂账客户" min-width="220" fixed="left" show-overflow-tooltip />
+        <el-table-column prop="dept" label="部门" width="110" show-overflow-tooltip />
+        <el-table-column prop="salesperson" label="业务员" width="95" show-overflow-tooltip />
 
-        <el-table-column label="已发货未开票" width="160" align="right">
+        <el-table-column label="已发货未开票" width="150" align="right">
           <template #default="{ row }">
             <span class="mx-amt">{{ num(row.uninvoiced_amount) }}</span>
             <span class="mx-sub">{{ row.uninvoiced_count || 0 }} 单</span>
           </template>
         </el-table-column>
-        <el-table-column label="已开票未回款" width="160" align="right">
+        <el-table-column label="已开票未回款" width="150" align="right">
           <template #default="{ row }">
             <span class="mx-amt">{{ num(row.unpaid_amount) }}</span>
             <span class="mx-sub">{{ row.unpaid_count || 0 }} 单</span>
           </template>
         </el-table-column>
-        <el-table-column label="其中 3 个月以上" width="150" align="right">
+        <el-table-column
+          label="其中 3 个月以上"
+          width="140"
+          align="right"
+          :filters="overdueFilters"
+          :filter-method="filterOverdue"
+          filter-placement="bottom-end"
+        >
           <template #default="{ row }">
-            <span class="mx-amt" :class="{ 'mx-danger': Number(row.unpaid_over3m || 0) > 0 }">
+            <span
+              class="mx-amt"
+              :class="{ 'mx-danger': Number(row.unpaid_over3m || 0) + Number(row.uninvoiced_over3m || 0) > 0 }"
+            >
               {{ num((row.unpaid_over3m || 0) + (row.uninvoiced_over3m || 0)) }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="total_receivable" label="合计应收" width="150" align="right">
+        <el-table-column
+          prop="total_receivable"
+          label="合计应收"
+          width="145"
+          align="right"
+          :filters="amountFilters"
+          :filter-method="filterAmount"
+          filter-placement="bottom-end"
+        >
           <template #default="{ row }"><span class="mx-amt strong">{{ num(row.total_receivable) }}</span></template>
         </el-table-column>
 
@@ -82,7 +98,7 @@
           :key="p.key"
           :prop="p.key"
           :label="p.label"
-          width="130"
+          width="125"
           align="right"
         >
           <template #default="{ row }">
@@ -91,24 +107,48 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="销售反馈" min-width="280">
+        <el-table-column
+          label="销售反馈"
+          min-width="290"
+          :filters="feedbackFilters"
+          :filter-method="filterFeedback"
+          filter-placement="bottom-end"
+        >
           <template #default="{ row }">
-            <div v-if="row.board_note" class="fb-item">
-              <el-tag size="small" type="success" effect="plain">看板</el-tag>
-              <span class="fb-text">{{ row.board_note }}</span>
-              <span class="mx-sub">{{ fmtTime(row.board_note_at) }}</span>
+            <el-input
+              v-if="canEditDetail && editingKey === row.customer_name"
+              ref="noteInputs"
+              v-model="editValue"
+              type="textarea"
+              :rows="1"
+              :autosize="{ minRows: 1, maxRows: 4 }"
+              placeholder="填写进度反馈（Enter 保存，Esc 取消）"
+              @blur="saveNote(row)"
+              @keydown.enter.prevent="saveNote(row)"
+              @keydown.esc.stop="cancelNote"
+            />
+            <div v-else class="fb-list">
+              <div class="fb-item" :class="{ 'fb-edit': canEditDetail }" @click="startEdit(row)">
+                <el-tag size="small" type="success" effect="plain">看板</el-tag>
+                <el-tooltip v-if="row.board_note" :content="row.board_note" placement="top" :show-after="300">
+                  <span class="fb-text">{{ row.board_note }}</span>
+                </el-tooltip>
+                <span v-else class="fb-text fb-muted">{{ canEditDetail ? '点击填写进度反馈' : '未填写' }}</span>
+                <span v-if="row.board_note_at" class="mx-sub">{{ fmtTime(row.board_note_at) }}</span>
+              </div>
+              <div v-if="row.excel_progress" class="fb-item">
+                <el-tag size="small" type="warning" effect="plain">源表</el-tag>
+                <el-tooltip :content="row.excel_progress" placement="top" :show-after="300">
+                  <span class="fb-text">{{ row.excel_progress }}</span>
+                </el-tooltip>
+              </div>
+              <div v-if="row.excel_remark" class="fb-item">
+                <el-tag size="small" type="info" effect="plain">备注</el-tag>
+                <el-tooltip :content="row.excel_remark" placement="top" :show-after="300">
+                  <span class="fb-text">{{ row.excel_remark }}</span>
+                </el-tooltip>
+              </div>
             </div>
-            <div v-if="row.excel_progress" class="fb-item">
-              <el-tag size="small" type="warning" effect="plain">源表</el-tag>
-              <span class="fb-text">{{ row.excel_progress }}</span>
-            </div>
-            <div v-if="row.excel_remark" class="fb-item">
-              <el-tag size="small" type="info" effect="plain">备注</el-tag>
-              <span class="fb-text">{{ row.excel_remark }}</span>
-            </div>
-            <span v-if="!row.board_note && !row.excel_progress && !row.excel_remark" class="mx-zero">
-              未填写
-            </span>
           </template>
         </el-table-column>
       </el-table>
@@ -117,8 +157,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { getCustomerDebt } from '@/api'
+import { ref, computed, onMounted, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
+import { getCustomerDebt, updateDetailNote } from '@/api'
+import { useAuth } from '@/composables/useAuth'
+
+const { canEditDetail } = useAuth()
 
 const q = ref('')
 const dept = ref('')
@@ -128,6 +172,93 @@ const summary = ref(null)
 const productLineMeta = ref([])
 const rows = ref([])
 const depts = ref([])
+
+// ====== 进度反馈就地编辑（与「明细查询」「我的业绩」同一套交互）======
+// 键用客户名（本页是客户级，没有行 id）；存库仍按 **单据号**
+// （detail_note 主键是 biz_type + doc_no，后端已给出该客户的代表单据号）。
+const editingKey = ref(null)
+const editValue = ref('')
+const noteInputs = ref([])
+
+function startEdit(row) {
+  if (!canEditDetail.value) return
+  editingKey.value = row.customer_name
+  editValue.value = row.board_note || ''
+  nextTick(() => {
+    const el = noteInputs.value && noteInputs.value[0]
+    if (el && el.focus) el.focus()
+  })
+}
+
+function cancelNote() {
+  editingKey.value = null
+  editValue.value = ''
+}
+
+/** 保存：写库成功才改行上的值；失败回退原值（不留下「看着存了其实没存」的假象） */
+async function saveNote(row) {
+  if (editingKey.value !== row.customer_name) return
+  const value = editValue.value.trim()
+  const original = row.board_note || ''
+  cancelNote()
+  if (value === original) return
+  if (!row.note_doc_no) {
+    ElMessage.warning('该客户在最新批次里找不到单据号，无法保存')
+    return
+  }
+  try {
+    await updateDetailNote(row.note_biz_type, row.note_doc_no, value)
+    row.board_note = value || null
+    row.board_note_at = new Date().toISOString()
+    ElMessage.success('进度反馈已保存')
+  } catch (err) {
+    row.board_note = original
+    console.error('[客户欠款] 保存反馈失败:', err)
+    ElMessage.error('保存失败')
+  }
+}
+
+// ====== 表头列筛选 ======
+const overdueFilters = [
+  { text: '全部', value: 'all' },
+  { text: '有 3 个月以上逾期', value: 'overdue' },
+  { text: '无逾期', value: 'none' },
+]
+function filterOverdue({ row, value }) {
+  const over = Number(row.unpaid_over3m || 0) + Number(row.uninvoiced_over3m || 0)
+  if (value === 'overdue') return over > 0
+  if (value === 'none') return over <= 0
+  return true
+}
+
+const amountFilters = [
+  { text: '全部', value: 'all' },
+  { text: '≥ 10 万', value: '10' },
+  { text: '≥ 50 万', value: '50' },
+  { text: '≥ 100 万', value: '100' },
+]
+function filterAmount({ row, value }) {
+  if (value === 'all') return true
+  const w = Number(value || 0) * 10000
+  return Number(row.total_receivable || 0) >= w
+}
+
+const feedbackFilters = [
+  { text: '全部', value: 'all' },
+  { text: '有反馈', value: 'any' },
+  { text: '无反馈', value: 'none' },
+  { text: '仅看板填了', value: 'board' },
+  { text: '仅源表填了', value: 'excel' },
+]
+function filterFeedback({ row, value }) {
+  const b = !!row.board_note
+  const e = !!row.excel_progress || !!row.excel_remark
+  if (value === 'any') return b || e
+  if (value === 'none') return !b && !e
+  if (value === 'board') return b && !e
+  if (value === 'excel') return e && !b
+  return true
+}
 
 const sumCards = computed(() => {
   const s = summary.value
@@ -216,6 +347,18 @@ onMounted(load)
 .mx-sub { font-size: 11px; color: #a8abb2; margin-left: 6px; }
 .mx-zero { color: #c0c4cc; }
 
-.fb-item { display: flex; align-items: baseline; gap: 6px; line-height: 1.7; }
-.fb-text { font-size: 12px; color: #303133; }
+.fb-list { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
+.fb-item { display: flex; align-items: baseline; gap: 6px; line-height: 1.6; }
+.fb-item.fb-edit { cursor: pointer; }
+.fb-item.fb-edit:hover .fb-text { color: #409eff; text-decoration: underline; }
+.fb-text {
+  font-size: 12px;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.fb-muted { color: #c0c4cc; }
 </style>

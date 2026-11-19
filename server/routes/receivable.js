@@ -2594,13 +2594,21 @@ router.get('/customer-debt', async (req, res, next) => {
           GROUP BY 1, 2, 3
        ),
        fb AS (   -- 看板里销售填的「进度反馈」：按客户取最新一条
-         SELECT d2.customer_name, n.note, n.updated_at,
+         SELECT d2.customer_name, n.biz_type, n.doc_no, n.note, n.updated_at,
                 ROW_NUMBER() OVER (PARTITION BY d2.customer_name ORDER BY n.updated_at DESC) AS rn
            FROM detail_note n
            JOIN receivable_detail d2
              ON d2.doc_no = n.doc_no AND d2.biz_type = n.biz_type
           WHERE n.note IS NOT NULL AND TRIM(n.note) <> ''
             AND d2.batch_id IN ($1, $2)
+       ),
+       rep AS (   -- 每个客户的「代表单据号」：本页按客户编辑反馈，要落到某个具体单据上
+                 -- 优先未回款线（跟进多半在这条线），否则取已发货未开票线的
+         SELECT customer_name, biz_type, doc_no,
+                ROW_NUMBER() OVER (PARTITION BY customer_name
+                                   ORDER BY (biz_type = 'billed_unpaid') DESC, doc_no) AS rn
+           FROM receivable_detail
+          WHERE batch_id IN ($1, $2)
        )
        SELECT live.customer_name, live.dept, live.salesperson,
               live.uninvoiced_amount, live.uninvoiced_over3m, live.uninvoiced_count,
@@ -2609,12 +2617,15 @@ router.get('/customer-debt', async (req, res, next) => {
               cp.pl_lijianjin, cp.pl_marketing_gift, cp.pl_activity, cp.pl_modern_service,
               cp.pl_channel, cp.pl_outbound, cp.pl_software, cp.pl_scene, cp.pl_check,
               cp.remark AS excel_remark, cp.progress_note AS excel_progress,
-              fb.note AS board_note, fb.updated_at AS board_note_at
+              fb.note AS board_note, fb.updated_at AS board_note_at,
+              COALESCE(fb.doc_no, rep.doc_no)   AS note_doc_no,
+              COALESCE(fb.biz_type, rep.biz_type) AS note_biz_type
          FROM live
          LEFT JOIN customer_debt_product cp
                 ON cp.customer_name = live.customer_name
                AND cp.snapshot_date = (SELECT MAX(snapshot_date) FROM customer_debt_product)
          LEFT JOIN fb ON fb.customer_name = live.customer_name AND fb.rn = 1
+         LEFT JOIN rep ON rep.customer_name = live.customer_name AND rep.rn = 1
         WHERE 1=1 ${whereSql}
         ORDER BY total_receivable DESC`,
       [billedId || 0, shippedId || 0, ...params]
