@@ -1,49 +1,19 @@
 <template>
   <div class="container">
     <!-- 2026-11-19 使用者定案：
-         · 不要页头、不要产品线分布表，只要明细
-         · 不要「其中 3 个月以上」列
+         · 这一页**只留明细**，不要汇总卡、不要顶部筛选行
+         · 不要「开票方案数」列
          · 每一列都要能筛选
-         · 销售直接在看板里填进度，Excel 不再同步 -->
-    <!-- 汇总 -->
-    <el-row :gutter="12" class="sum-row">
-      <el-col v-for="c in sumCards" :key="c.label" :span="6">
-        <el-card shadow="never" class="sum-card">
-          <div class="sum-label">{{ c.label }}</div>
-          <div class="sum-value">{{ num(c.value) }}</div>
-          <div v-if="c.sub" class="sum-sub">{{ c.sub }}</div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- 筛选 -->
-    <el-card shadow="never" class="filter-card no-export">
-      <el-input
-        v-model="q"
-        placeholder="客户名"
-        clearable
-        style="width:200px"
-        @keyup.enter="load"
-        @clear="load"
-      />
-      <el-select v-model="dept" placeholder="全部部门" clearable style="width:140px" @change="load">
-        <el-option v-for="d in depts" :key="d" :label="d" :value="d" />
-      </el-select>
-      <el-button size="small" :type="onlyUnpaid ? 'primary' : ''" @click="toggleOnly">
-        {{ onlyUnpaid ? '✓ ' : '' }}只看有未回款
-      </el-button>
-      <el-button size="small" @click="load">刷新</el-button>
-      <el-button size="small" @click="clearTableFilters">清除列筛选</el-button>
-      <span class="filter-tip">每个列标题右侧的 ▼ 都能筛选</span>
-    </el-card>
+         · 每天的变化记录起来（「较昨日」列 + 后台日快照表） -->
 
     <!-- 明细 -->
     <el-card shadow="never" class="block-card">
       <template #header>
         <span class="card-title">客户明细（{{ rows.length }}）</span>
         <span class="card-hint">
-          数据全部来自利润管控系统（每天自动取数后在系统内汇总）；点「销售反馈」即可填写进度
+          数据来自利润管控系统（每天自动取数后汇总）；「较昨日」对比每日快照
         </span>
+        <el-button size="small" class="card-btn" @click="clearTableFilters">清除列筛选</el-button>
       </template>
       <el-table
         ref="tableRef"
@@ -128,17 +98,6 @@
           </template>
         </el-table-column>
 
-        <!-- 开票方案数 -->
-        <el-table-column
-          prop="invoice_count"
-          label="开票方案数"
-          width="100"
-          align="right"
-          :filters="countFilters"
-          :filter-method="filterCount('invoice_count')"
-          filter-placement="bottom-end"
-        />
-
         <!-- 开票金额 -->
         <el-table-column
           prop="invoiced_amount"
@@ -192,6 +151,28 @@
           filter-placement="bottom-end"
         >
           <template #default="{ row }"><span class="mx-amt strong">{{ num(row.total_receivable) }}</span></template>
+        </el-table-column>
+
+        <!-- 较昨日变化（每天的快照对比，2026-11-19 使用者要求「每天的变化记录起来」） -->
+        <el-table-column
+          prop="diff_total"
+          label="较昨日"
+          width="135"
+          align="right"
+          :filters="diffFilters"
+          :filter-method="filterDiff"
+          filter-placement="bottom-end"
+        >
+          <template #default="{ row }">
+            <span v-if="row.is_new_customer" class="mx-new">新增</span>
+            <span
+              v-else-if="Math.abs(Number(row.diff_total || 0)) < 0.005"
+              class="mx-zero"
+            >—</span>
+            <span v-else class="mx-diff" :class="Number(row.diff_total) > 0 ? 'mx-up' : 'mx-down'">
+              {{ Number(row.diff_total) > 0 ? '+' : '' }}{{ num(row.diff_total) }}
+            </span>
+          </template>
         </el-table-column>
 
         <!-- 8 个产品线 -->
@@ -257,10 +238,6 @@ import { getCustomerDebt, updateDetailNote } from '@/api'
 import { useAuth } from '@/composables/useAuth'
 
 const { canEditDetail } = useAuth()
-
-const q = ref('')
-const dept = ref('')
-const onlyUnpaid = ref(false)
 
 const summary = ref(null)
 const productLineMeta = ref([])
@@ -420,6 +397,25 @@ function filterFeedback({ row, value }) {
   return true
 }
 
+/** 「较昨日」列 */
+const diffFilters = [
+  ALL,
+  { text: '有变化', value: 'changed' },
+  { text: '无变化', value: 'same' },
+  { text: '金额增加', value: 'up' },
+  { text: '金额减少', value: 'down' },
+  { text: '新增客户', value: 'new' },
+]
+function filterDiff({ row, value }) {
+  const d = Number(row.diff_total || 0)
+  if (value === 'changed') return row.is_new_customer || Math.abs(d) >= 0.005
+  if (value === 'same') return !row.is_new_customer && Math.abs(d) < 0.005
+  if (value === 'up') return !row.is_new_customer && d >= 0.005
+  if (value === 'down') return !row.is_new_customer && d <= -0.005
+  if (value === 'new') return !!row.is_new_customer
+  return true
+}
+
 /** 一键清掉所有列筛选（表头那些 ▼ 的选中项） */
 function clearTableFilters() {
   const t = tableRef.value
@@ -427,21 +423,6 @@ function clearTableFilters() {
   t.clearFilter()
   ElMessage.success('已清除列筛选')
 }
-
-const sumCards = computed(() => {
-  const s = summary.value
-  if (!s) return []
-  return [
-    { label: '合计应收（元）', value: s.totalReceivable, sub: `${s.customerCount} 个客户` },
-    { label: '已发货未开票（元）', value: s.uninvoicedAmount, sub: '货已发、票未开' },
-    { label: '已开票未回款（元）', value: s.unpaidAmount, sub: '票已开、钱未收' },
-    {
-      label: '有销售反馈的客户',
-      value: s.withFeedback,
-      sub: `产品线已匹配 ${s.matchedProduct} 家`,
-    },
-  ]
-})
 
 /** 金额千分位；空值显示 — */
 function num(v) {
@@ -459,18 +440,9 @@ function fmtTime(s) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-function toggleOnly() {
-  onlyUnpaid.value = !onlyUnpaid.value
-  load()
-}
-
 async function load() {
-  const params = {}
-  if (q.value) params.q = q.value
-  if (dept.value) params.dept = dept.value
-  if (onlyUnpaid.value) params.only = 'unpaid'
   try {
-    const d = await getCustomerDebt(params)
+    const d = await getCustomerDebt()
     summary.value = d.summary
     productLineMeta.value = d.productLineMeta || []
     rows.value = d.rows || []
@@ -513,6 +485,18 @@ onMounted(load)
 .mx-amt.strong { font-weight: 500; color: #2c3e50; }
 .mx-sub { font-size: 11px; color: #a8abb2; margin-left: 6px; }
 .mx-zero { color: #c0c4cc; }
+.mx-diff { font-variant-numeric: tabular-nums; }
+.mx-up { color: #cf1322; }
+.mx-down { color: #389e0d; }
+.mx-new {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #e6f4ff;
+  color: #1677ff;
+  font-size: 11px;
+}
+.card-btn { margin-left: 12px; }
 
 .fb-list { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
 .fb-item { display: flex; align-items: baseline; gap: 6px; line-height: 1.6; }

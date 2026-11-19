@@ -3,8 +3,9 @@
  * 支持两种业务类型：billed_unpaid（已开票未回款）、shipped_uninvoiced（已发货未开票）
  */
 import { Router } from 'express'
-import { query, normalizeDate } from '../db/pool.js'
+import { pool, query, normalizeDate } from '../db/pool.js'
 import { PRODUCT_LINES } from '../services/productLines.js'
+import { ensureCustomerDailyTable } from '../services/customerDaily.js'
 import { toDateOnly } from '../utils/date.js'
 import {
   startSync,
@@ -2554,6 +2555,13 @@ router.get('/customer-debt', async (req, res, next) => {
   try {
     const { q = '', dept = '', only = '' } = req.query
 
+    // 每日快照表可能还没建（首次部署/迁移后）⇒ 先确保存在，否则下面的 CTE 会直接报错
+    try {
+      await ensureCustomerDailyTable(pool)
+    } catch (e) {
+      console.error('[customer-debt] 快照表初始化失败:', e.message)
+    }
+
     // 两条线各自最新批次（实时口径）
     const latest = await query(
       `SELECT biz_type, id FROM import_batch b
@@ -2584,7 +2592,15 @@ router.get('/customer-debt', async (req, res, next) => {
     //   customer_invoice   ← 客户开票明细表(26)：开票方案数、开票金额、回款金额
     //   detail_note        ← 销售在看板里填的进度反馈（销售直接在这里填，不走 Excel）
     const rows = await query(
-      `WITH live AS (
+      `WITH dv AS (   -- 最近两份客户级日快照（今天、上一份可比的）
+         SELECT snapshot_date::date AS d FROM customer_debt_daily GROUP BY 1 ORDER BY 1 DESC LIMIT 2
+       ),
+       prev AS (      -- 上一份快照里每个客户的合计应收 ⇒ 用来算「较昨日变化」
+         SELECT customer_name, total_receivable
+           FROM customer_debt_daily
+          WHERE snapshot_date = (SELECT d FROM dv OFFSET 1 LIMIT 1)
+       ),
+       live AS (
          SELECT d.customer_name,
                 COALESCE(NULLIF(TRIM(d.department),''),'（未分类）') AS dept,
                 d.salesperson,
@@ -2657,12 +2673,17 @@ router.get('/customer-debt', async (req, res, next) => {
               COALESCE(rc.pl_scene, 0)::float8          AS pl_scene,
               fb.note AS board_note, fb.updated_at AS board_note_at,
               COALESCE(fb.doc_no, rep.doc_no)     AS note_doc_no,
-              COALESCE(fb.biz_type, rep.biz_type) AS note_biz_type
+              COALESCE(fb.biz_type, rep.biz_type) AS note_biz_type,
+              -- 「较昨日变化」：今天合计应收 − 上一份日快照的合计应收
+              (COALESCE(live.uninvoiced_amount,0) + COALESCE(live.unpaid_amount,0))
+                - COALESCE(prev.total_receivable, 0)::float8 AS diff_total,
+              (prev.customer_name IS NULL) AS is_new_customer
          FROM live
          LEFT JOIN rc ON rc.customer = live.customer_name
          LEFT JOIN iv ON iv.customer = live.customer_name
          LEFT JOIN fb ON fb.customer_name = live.customer_name AND fb.rn = 1
          LEFT JOIN rep ON rep.customer_name = live.customer_name AND rep.rn = 1
+         LEFT JOIN prev ON prev.customer_name = live.customer_name
         WHERE 1=1 ${whereSql}
         ORDER BY total_receivable DESC`,
       [billedId || 0, shippedId || 0, ...params]
@@ -2679,6 +2700,20 @@ router.get('/customer-debt', async (req, res, next) => {
       unpaidOver3m: sum('unpaid_over3m'),
       withFeedback: list.filter((r) => r.board_note).length,
       matchedProduct: list.filter((r) => PRODUCT_LINES.some((p) => Number(r[p.key] || 0) !== 0)).length,
+      // 「今天 vs 上一份日快照」的变化统计
+      changedCount: list.filter((r) => Math.abs(Number(r.diff_total || 0)) > 0.005).length,
+      newCount: list.filter((r) => r.is_new_customer).length,
+      goneCount: (
+        await query(
+          `SELECT COUNT(*)::int AS n FROM customer_debt_daily p
+            WHERE p.snapshot_date = (SELECT snapshot_date::date FROM customer_debt_daily
+                                       GROUP BY 1 ORDER BY 1 DESC LIMIT 1 OFFSET 1)
+              AND NOT EXISTS (SELECT 1 FROM receivable_detail d
+                               WHERE d.batch_id IN ($1, $2) AND d.customer_name = p.customer_name)`,
+          [billedId || 0, shippedId || 0]
+        )
+      ).rows[0]?.n || 0,
+      diffTotal: list.reduce((a, r) => a + Number(r.diff_total || 0), 0),
     }
 
     // 产品线分布（按当前筛选结果）

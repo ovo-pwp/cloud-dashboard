@@ -30,6 +30,8 @@ import {
 import { runBackup } from './services/dbBackup.js'
 // 「当日回款」自动标注：判断每笔是真回款 / 补录 / 源表删行（2026-10-27 使用者要求「每天都是这样」）
 import { refreshPayInfo, autoAnnotatePayments } from './services/autoNote.js'
+// 客户欠款 · 每日快照（2026-11-19 使用者：「每天的变化记录起来，好知道有没有发生变化」）
+import { writeCustomerDailySnapshot } from './services/customerDaily.js'
 import {
   CUSTOMER_INVOICE_BIZ_TYPE,
   CUSTOMER_INVOICE_OUT_NAME,
@@ -328,6 +330,15 @@ async function runSyncTick() {
       } else {
         log('报表未全部导入成功，本轮不记降频时间，下一轮会重新拉取')
       }
+    }
+
+    // 客户级日快照（当天重复写会覆盖 ⇒ 始终是最新状态）
+    // 有了它才能回答「今天跟昨天比，谁变了、变了多少」
+    try {
+      const snap = await writeCustomerDailySnapshot(pool)
+      log(`  · 客户欠款日快照：${snap.snapshotDate}（${snap.rows} 个客户）`)
+    } catch (snapErr) {
+      errLog('  ⚠ 客户欠款日快照写入失败: ' + snapErr.message)
     }
 
     message = `定时同步完成：成功导入 ${okCnt}/${specs.length} 张表` +
