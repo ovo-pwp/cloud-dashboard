@@ -138,7 +138,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ArrowRight, DataAnalysis, Document, Grid, InfoFilled, Money,
-  TrendCharts, User,
+  User,
 } from '@element-plus/icons-vue'
 import { getBizTypes } from '@/api'
 import { useAuth } from '@/composables/useAuth'
@@ -171,11 +171,6 @@ const entries = computed(() => {
       name: '客户平台未回款', path: '/customer-platform-unpaid', icon: Money,
       color: 'linear-gradient(135deg,#ffa940,#fa8c16)',
       desc: '客户在各平台的未回款金额，按客户 + 平台两级汇总',
-    },
-    {
-      name: '每日趋势', path: '/trend', icon: TrendCharts,
-      color: 'linear-gradient(135deg,#9254de,#722ed1)',
-      desc: '金额随时间怎么变，判断催收有没有效果',
     },
     {
       name: '我的业绩', path: '/my-performance', icon: User,

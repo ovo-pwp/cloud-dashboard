@@ -82,7 +82,6 @@
         <ul>
           <li>📊 未回款 / 未开票管理看板（billed_unpaid / shipped_uninvoiced）</li>
           <li>🏪 客户平台未回款金额看板（customer_platform_unpaid）</li>
-          <li>🎯 待处理优先级清单（priority_actions · 只读）</li>
           <li>⚙️ 系统管理（数据同步、导入、用户、登录日志）</li>
         </ul>
         <p class="muted">新增项目只需在此注册一个模块卡片即可接入总系统，实现隔离与统一管理。</p>
@@ -108,7 +107,7 @@ const modules = ref([
   {
     id: 1,
     name: '未回款/未开票管理看板',
-    desc: '已开票未回款 · 已发货未开票 · 数据总览 · 明细查询 · 按客户汇总 · 每日趋势',
+    desc: '已开票未回款 · 已发货未开票 · 数据总览 · 明细查询 · 按客户汇总 · 客户欠款总览',
     path: '/home',
     icon: 'DataAnalysis',
     color: '#2563eb',
@@ -124,16 +123,6 @@ const modules = ref([
     color: '#7c3aed',
     badge: '独立模块',
     badgeType: 'warning',
-  },
-  {
-    id: 3,
-    name: '待处理优先级清单',
-    desc: '按「金额 × 账龄」排出催收顺序，回答「先打哪个电话」',
-    path: '/priority-actions',
-    icon: 'Flag',
-    color: '#dc2626',
-    badge: '新',
-    badgeType: 'danger',
   },
   {
     id: 4,

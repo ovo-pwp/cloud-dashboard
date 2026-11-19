@@ -53,12 +53,6 @@
             <el-menu-item index="/trace">
               <el-icon><Search /></el-icon><span>单号追溯</span>
             </el-menu-item>
-            <el-menu-item index="/trend">
-              <el-icon><TrendCharts /></el-icon><span>每日趋势</span>
-            </el-menu-item>
-            <el-menu-item index="/priority-actions">
-              <el-icon><Flag /></el-icon><span>待处理优先级</span>
-            </el-menu-item>
             <el-menu-item index="/invoice-daily">
               <el-icon><Money /></el-icon><span>每日发货·回款</span>
             </el-menu-item>
@@ -165,9 +159,7 @@ import { ElMessage } from 'element-plus'
 import {
   DataAnalysis,
   Document,
-  User,
-  TrendCharts,
-  Flag,
+  User,
   Money,
   Setting,
   HomeFilled,
