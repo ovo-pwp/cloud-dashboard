@@ -2535,70 +2535,102 @@ router.get('/trace', async (req, res, next) => {
 })
 
 // ------------------------------------------------------------
-// GET /api/customer-debt  客户欠款 · 按产品线（2026-11-19 新增）
+// GET /api/customer-debt  客户欠款 · 客户视图（2026-11-19）
 //
-// 数据源：云文档里的普通表格文件「客户欠款-按产品线拆分.xlsx」（手工维护，6 小时拉一次）。
-// 相比另两条业务线，它多两个现在没有的维度：
-//   ① 9 个产品线的欠款拆分（立减金/营销礼品/活动策划/现代服务/渠道营销产品/
-//      自营场外引流订单/软件/场景获客）
-//   ② 客户应收总表（合同数 / 实际出库 / 开票金额 / 回款金额 / 合计应收）
-// 外加「备注」「沟通回款进度」两列，是销售跟进用的。
+// 使用者的原话：「能实时更新应收情况，又能把销售填的反馈结果合起来，
+// 我好知道是什么情况」⇒ 三件事必须合在一张表里：
+//   ① **实时应收**：以看板数据源（多维表格，每小时同步）为准，
+//      按客户汇总「已发货未开票 / 已开票未回款 / 合计应收 / 3个月以上」
+//   ② **产品线拆分**：来自云文档里手工维护的 xlsx《客户欠款-按产品线拆分》
+//      （6 小时一次）—— 只是补充维度，不是主数据源
+//   ③ **销售反馈**：两处都要有 ——
+//      · 看板里销售自己填的「进度反馈」（detail_note，按单据号）
+//      · 源表 Excel 里销售填的「沟通回款进度」+「备注」
+//      按客户名合并，一列看完，不用两头跑
 //
-// 查询参数：q（客户名模糊）、dept（部门）、product（只看某个产品线有欠款的客户）
+// 查询参数：q（客户名模糊）、dept（部门）、only（只看有未回款的）
 // ------------------------------------------------------------
 router.get('/customer-debt', async (req, res, next) => {
   try {
-    const { q = '', dept = '', product = '' } = req.query
+    const { q = '', dept = '', only = '' } = req.query
 
+    // 两条线各自最新批次（实时口径）
     const latest = await query(
-      `SELECT MAX(snapshot_date)::text AS d FROM customer_debt_product`
+      `SELECT biz_type, id FROM import_batch b
+        WHERE biz_type IN ('billed_unpaid','shipped_uninvoiced')
+          AND id = (SELECT id FROM import_batch WHERE biz_type = b.biz_type
+                     ORDER BY snapshot_date DESC, id DESC LIMIT 1)`
     )
-    const snapshotDate = latest.rows[0]?.d
-    if (!snapshotDate) {
-      return res.json({
-        snapshotDate: null, summary: null, productLines: [], rows: [], productLineMeta: PRODUCT_LINES,
-      })
+    const bid = {}
+    latest.rows.forEach((r) => { bid[r.biz_type] = r.id })
+    const billedId = bid.billed_unpaid
+    const shippedId = bid.shipped_uninvoiced
+    if (!billedId && !shippedId) {
+      return res.json({ snapshotDate: null, summary: null, productLines: [], rows: [], productLineMeta: PRODUCT_LINES, depts: [] })
     }
 
-    const where = ['snapshot_date = $1']
-    const params = [snapshotDate]
-    if (q) {
-      params.push(`%${q}%`)
-      where.push(`customer_name ILIKE $${params.length}`)
-    }
-    if (dept) {
-      params.push(dept)
-      where.push(`dept = $${params.length}`)
-    }
-    if (product) {
-      // ⚠️ 列名只能来自白名单常量（PRODUCT_LINES），**绝不能把请求参数拼进 SQL**
-      const pl = PRODUCT_LINES.find((p) => p.key === product)
-      where.push(pl ? `COALESCE("${pl.key}", 0) <> 0` : 'FALSE')
-    }
-    const whereSql = where.join(' AND ')
+    const where = []
+    const params = []
+    if (q) { params.push(`%${q}%`); where.push(`live.customer_name ILIKE $${params.length}`) }
+    if (dept) { params.push(dept); where.push(`live.dept = $${params.length}`) }
+    if (only === 'unpaid') where.push(`live.unpaid_amount > 0`)
+    const whereSql = where.length ? ' AND ' + where.join(' AND ') : ''
 
+    // ① 实时应收（按客户汇总）+ ② 产品线拆分 + ③ 两处销售反馈
     const rows = await query(
-      `SELECT customer_name, dept, salesperson, contract_count, shipped_amount, uninvoiced_amount,
-              invoice_count, invoiced_amount, paid_amount, unpaid_amount, total_receivable,
-              pl_lijianjin, pl_marketing_gift, pl_activity, pl_modern_service, pl_channel,
-              pl_outbound, pl_software, pl_scene, pl_check, remark, progress_note
-         FROM customer_debt_product
-        WHERE ${whereSql}
-        ORDER BY COALESCE(total_receivable, 0) DESC`,
-      params
+      `WITH live AS (
+         SELECT d.customer_name,
+                COALESCE(NULLIF(TRIM(d.department),''),'（未分类）') AS dept,
+                d.salesperson,
+                SUM(CASE WHEN d.biz_type = 'shipped_uninvoiced' THEN d.amount_total ELSE 0 END)      AS uninvoiced_amount,
+                SUM(CASE WHEN d.biz_type = 'shipped_uninvoiced' THEN d.amount_over3m ELSE 0 END)     AS uninvoiced_over3m,
+                COUNT(DISTINCT CASE WHEN d.biz_type = 'shipped_uninvoiced' THEN d.doc_no END)        AS uninvoiced_count,
+                SUM(CASE WHEN d.biz_type = 'billed_unpaid' THEN d.amount_total ELSE 0 END)           AS unpaid_amount,
+                SUM(CASE WHEN d.biz_type = 'billed_unpaid' THEN d.amount_over3m ELSE 0 END)          AS unpaid_over3m,
+                COUNT(DISTINCT CASE WHEN d.biz_type = 'billed_unpaid' THEN d.doc_no END)             AS unpaid_count,
+                MAX(CASE WHEN d.biz_type = 'billed_unpaid' THEN d.amount_over3m ELSE 0 END)           AS max_over3m
+           FROM receivable_detail d
+          WHERE d.batch_id IN ($1, $2)
+          GROUP BY 1, 2, 3
+       ),
+       fb AS (   -- 看板里销售填的「进度反馈」：按客户取最新一条
+         SELECT d2.customer_name, n.note, n.updated_at,
+                ROW_NUMBER() OVER (PARTITION BY d2.customer_name ORDER BY n.updated_at DESC) AS rn
+           FROM detail_note n
+           JOIN receivable_detail d2
+             ON d2.doc_no = n.doc_no AND d2.biz_type = n.biz_type
+          WHERE n.note IS NOT NULL AND TRIM(n.note) <> ''
+            AND d2.batch_id IN ($1, $2)
+       )
+       SELECT live.customer_name, live.dept, live.salesperson,
+              live.uninvoiced_amount, live.uninvoiced_over3m, live.uninvoiced_count,
+              live.unpaid_amount, live.unpaid_over3m, live.unpaid_count, live.max_over3m,
+              (COALESCE(live.uninvoiced_amount,0) + COALESCE(live.unpaid_amount,0)) AS total_receivable,
+              cp.pl_lijianjin, cp.pl_marketing_gift, cp.pl_activity, cp.pl_modern_service,
+              cp.pl_channel, cp.pl_outbound, cp.pl_software, cp.pl_scene, cp.pl_check,
+              cp.remark AS excel_remark, cp.progress_note AS excel_progress,
+              fb.note AS board_note, fb.updated_at AS board_note_at
+         FROM live
+         LEFT JOIN customer_debt_product cp
+                ON cp.customer_name = live.customer_name
+               AND cp.snapshot_date = (SELECT MAX(snapshot_date) FROM customer_debt_product)
+         LEFT JOIN fb ON fb.customer_name = live.customer_name AND fb.rn = 1
+        WHERE 1=1 ${whereSql}
+        ORDER BY total_receivable DESC`,
+      [billedId || 0, shippedId || 0, ...params]
     )
 
-    // 汇总按**当前筛选结果**算（页面切了筛选，卡片跟着变，和别处口径一致）
-    const sum = (k) => rows.rows.reduce((a, r) => a + Number(r[k] || 0), 0)
+    const list = rows.rows
+    const sum = (k) => list.reduce((a, r) => a + Number(r[k] || 0), 0)
     const summary = {
-      customerCount: rows.rows.length,
+      customerCount: list.length,
       totalReceivable: sum('total_receivable'),
       uninvoicedAmount: sum('uninvoiced_amount'),
       unpaidAmount: sum('unpaid_amount'),
-      shippedAmount: sum('shipped_amount'),
-      invoicedAmount: sum('invoiced_amount'),
-      paidAmount: sum('paid_amount'),
-      contractCount: sum('contract_count'),
+      uninvoicedOver3m: sum('uninvoiced_over3m'),
+      unpaidOver3m: sum('unpaid_over3m'),
+      withFeedback: list.filter((r) => r.board_note || r.excel_progress || r.excel_remark).length,
+      matchedProduct: list.filter((r) => r.pl_check !== null || r.pl_lijianjin !== null).length,
     }
 
     // 产品线分布（按当前筛选结果）
@@ -2606,19 +2638,22 @@ router.get('/customer-debt', async (req, res, next) => {
       key: p.key,
       label: p.label,
       amount: sum(p.key),
-      customerCount: rows.rows.filter((r) => Number(r[p.key] || 0) !== 0).length,
+      customerCount: list.filter((r) => Number(r[p.key] || 0) !== 0).length,
     })).sort((a, b) => b.amount - a.amount)
 
     res.json({
-      snapshotDate,
+      snapshotDate: (await query(
+        `SELECT MAX(snapshot_date)::text AS d FROM import_batch WHERE id IN ($1,$2)`,
+        [billedId || 0, shippedId || 0]
+      )).rows[0]?.d || null,
       summary,
       productLines,
       productLineMeta: PRODUCT_LINES,
-      rows: rows.rows,
+      rows: list,
       depts: (await query(
-        `SELECT DISTINCT dept FROM customer_debt_product
-          WHERE snapshot_date = $1 AND dept IS NOT NULL ORDER BY dept`,
-        [snapshotDate]
+        `SELECT DISTINCT COALESCE(NULLIF(TRIM(department),''),'（未分类）') AS dept
+           FROM receivable_detail WHERE batch_id IN ($1,$2) ORDER BY 1`,
+        [billedId || 0, shippedId || 0]
       )).rows.map((r) => r.dept),
     })
   } catch (err) {

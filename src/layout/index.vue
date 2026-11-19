@@ -63,7 +63,7 @@
               <el-icon><Money /></el-icon><span>每日发货·回款</span>
             </el-menu-item>
             <el-menu-item index="/customer-debt">
-              <el-icon><DataAnalysis /></el-icon><span>客户欠款·产品线</span>
+              <el-icon><DataAnalysis /></el-icon><span>客户欠款总览</span>
             </el-menu-item>
           </el-sub-menu>
 
