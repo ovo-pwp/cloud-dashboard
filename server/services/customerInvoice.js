@@ -11,6 +11,7 @@
  *   整个导入在一个事务里：DELETE 旧数据 → 批量 INSERT，失败自动回滚。
  */
 import fs from 'node:fs'
+import { normalizeCustomerName } from '../utils/customerName.js'
 import XLSX from 'xlsx'
 import { query, pool } from '../db/pool.js'
 import { normalizeDept } from '../constants/dept.js'
@@ -171,7 +172,8 @@ export async function importCustomerInvoice(pool, { xlsxPath }) {
 /** 一行数据 → 接口返回的形状 */
 const toRow = (r) => ({
   planNo: r.plan_no || '',
-  customer: r.customer || '',
+  // 客户名规范化（2026-11-19）：与应收明细同一套规则
+  customer: normalizeCustomerName(r.customer || '').name,
   salesperson: r.salesperson || '',
   amount: Number(r.amount || 0),
   status: r.invoice_status || '',
@@ -303,7 +305,8 @@ async function getReconByDay({ from, to, salesperson, latest = false }) {
 const toRecon = (r) => ({
   contractNo: r.contract_no || '',
   projectName: r.project_name || '',
-  customer: r.customer || '',
+  // 客户名规范化（2026-11-19）：与应收明细同一套规则
+  customer: normalizeCustomerName(r.customer || '').name,
   salesperson: r.salesperson || '',
   productLine: r.product_line || '',
   orderStatus: r.order_status || '',

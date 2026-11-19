@@ -7,6 +7,7 @@
  */
 
 import XLSX from 'xlsx'
+import { normalizeCustomerName } from '../utils/customerName.js'
 import { todayDate, toDateOnly } from '../utils/date.js'
 import { toCityBatch } from './city.js'
 
@@ -187,7 +188,9 @@ export async function importExcel(pool, { bizType, xlsxPath, snapshotDate }) {
       doc_no: docNo,
       doc_date: docDate,
       aging_category: agingCategory,
-      customer_name: toText(r[3]) || '未知客户',
+      // 客户名规范化（2026-11-19）：源表写法五花八门（破折号混用 / 机构人名连写 / 部门名写错），
+      // 统一成「机构-部门-姓名」，源表不动，只规范入库后的名字。
+      customer_name: (toText(r[3]) ? normalizeCustomerName(toText(r[3])).name : '') || '未知客户',
       permission_raw: toText(r[4]),
       salesperson_raw: rawSalesperson || '未指定',
       department,
