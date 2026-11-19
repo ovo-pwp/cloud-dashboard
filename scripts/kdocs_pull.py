@@ -22,6 +22,7 @@
 """
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -260,6 +261,38 @@ TABLES = {
         # 看板会落进「未分类」那一行（11-04 有 3,900 元），暂时不计入。
         # 等他归队（或补上源表战队）后，把这里的名字去掉即可。
         "exclude_keywords": ["财务", "夏嘉伟"],
+    },
+    # ------------------------------------------------------------
+    # 客户欠款 · 按产品线拆分（2026-11-19 新增）
+    #   ⚠️ 这张**不是多维表格**，是云文档里的普通表格文件（xlsx），
+    #      所以 dbsheet.list_records 读不了 ⇒ 走 read_file 通道拿 markdown 全表。
+    #   来源：销售发的「客户欠款-按产品线拆分.xlsx」（分享链接）
+    #   内容：左半边=客户应收总表，右半边=9 个产品线的欠款拆分，
+    #        外加业务员 / 备注 / 沟通回款进度（跟进用）。
+    #   刷新频率：手工维护的表 ⇒ 6 小时拉一次（与开票/对账报表同组）。
+    # ------------------------------------------------------------
+    "客户欠款": {
+        "source": "file",          # ← 标记走 read_file 通道（不是多维表格）
+        "url": "https://365.kdocs.cn/l/csrYpy9APASO",
+        "file_name": "客户欠款-按产品线拆分.xlsx",
+        # 21 列，**按位置**解析（源表是合并表头，markdown 表头行不可靠）
+        "cols": [
+            "挂账客户", "合同数", "实际出库金额", "已发货未开票", "开票方案数",
+            "开票金额", "回款金额", "已开票未回款", "合计应收",
+            "立减金", "营销礼品", "活动策划", "现代服务", "渠道营销产品",
+            "自营场外引流订单", "软件", "场景获客", "产品线合计核对",
+            "业务员", "备注", "沟通回款进度",
+            "部门",   # ← 本地派生：由「业务员」按销售区域划分表映射出战队（与另两条线同口径）
+        ],
+        "num_cols": [
+            "合同数", "实际出库金额", "已发货未开票", "开票方案数", "开票金额",
+            "回款金额", "已开票未回款", "合计应收",
+            "立减金", "营销礼品", "活动策划", "现代服务", "渠道营销产品",
+            "自营场外引流订单", "软件", "场景获客", "产品线合计核对",
+        ],
+        "date_cols": [],
+        "sheet_name": "客户欠款",
+        "out_name": "(客户欠款-按产品线)客户欠款.xlsx",
     },
 }
 
@@ -690,6 +723,44 @@ def apply_view_filter(recs, spec, tag=""):
     return out
 
 
+def fetch_file_table(mcp, spec, key):
+    """普通表格文件（非多维表格）走 read_file 通道取全表。
+
+    2026-11-19：客户欠款-按产品线拆分.xlsx
+      · markdown 表格前 4 行是：标题行 / 分隔线 / 分区大标题行 / 真正列名行
+      · 数据从第 5 行起
+      · 必须排除「合计 / 小计 / 总计」行，否则汇总会翻倍（第一次踩过这个坑）
+      · 列按**位置**对应 spec["cols"]——源表是合并表头，markdown 表头行不可靠
+    """
+    r = mcp.call("read_file", {"url": spec["url"], "content_format": "markdown"})
+    content = (r.get("data") or {}).get("content") or ""
+    if not content.strip():
+        raise RuntimeError("read_file 返回空内容")
+    lines = [l for l in content.split("\n") if l.strip().startswith("|")]
+    if len(lines) < 5:
+        raise RuntimeError(f"markdown 表格行数异常: {len(lines)}")
+
+    def cells(line):
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+
+    cols = spec["cols"]
+    recs = []
+    skipped = 0
+    for line in lines[4:]:
+        cs = cells(line)
+        if not cs or not cs[0]:
+            continue
+        if re.search(r"合计|小计|总计", cs[0]):
+            skipped += 1
+            continue
+        fields = {}
+        for i, name in enumerate(cols):
+            fields[name] = cs[i] if i < len(cs) else ""
+        recs.append({"fields": fields})
+    log(f"    [文件表] {spec.get('file_name', key)} 解析 {len(recs)} 行（跳过合计行 {skipped}）")
+    return recs
+
+
 def fetch_records(mcp, sheet_id, cols, tag=""):
     """分页拉取整表记录。
 
@@ -1069,13 +1140,17 @@ def main():
     # （2026-10-24 使用者要求两条线统一按部门统计）
     dept_map = {}
     # 两条线都要「业务员 → 战队」，因为部门口径统一按使用者的「销售区域划分」表（2026-10-24）
-    if "未回款" in picked or "未开票" in picked:
+    if "未回款" in picked or "未开票" in picked or "客户欠款" in picked:
         dept_map = build_dept_map(mcp)
         log(f"    [部门映射] 载入 {len(dept_map)} 个人名→战队")
     for _idx, key in enumerate(picked):
         spec = TABLES[key]
         try:
-            recs = fetch_records(mcp, spec["sheet_id"], spec["cols"], key)
+            if spec.get("source") == "file":
+                # 普通表格文件（xlsx）⇒ read_file 通道，不是多维表格
+                recs = fetch_file_table(mcp, spec, key)
+            else:
+                recs = fetch_records(mcp, spec["sheet_id"], spec["cols"], key)
             # 先把别名值落到主字段（业务员←客户经理），过滤规则才读得到
             n_mat = materialize_aliases(recs, spec)
             if n_mat:
@@ -1094,6 +1169,24 @@ def main():
                     log(f"    [业务员别名] 换名 {n_alias} 条")
                 n_hit = apply_dept_map(recs, dept_map, spec)
                 log(f"    [部门映射] 补齐部门 {n_hit}/{len(recs)} 条")
+            # 客户欠款（文件表，2026-11-19）：「业务员」列混了人名和部门名（还有脏值），
+            # 同样按销售区域划分表归一，额外派生一列「部门」，口径与另两条线一致。
+            if spec.get("source") == "file":
+                n_alias2 = n_dept2 = 0
+                for r in recs:
+                    f = r.get("fields") or {}
+                    sp = (f.get("业务员") or "").strip()
+                    if sp in SALESMAN_ALIAS:
+                        f["业务员"] = SALESMAN_ALIAS[sp]
+                        sp = f["业务员"]
+                        n_alias2 += 1
+                    dept = dept_map.get(sp) if dept_map else None
+                    f["部门"] = dept or sp
+                    if dept:
+                        n_dept2 += 1
+                if n_alias2:
+                    log(f"    [业务员别名] 换名 {n_alias2} 条")
+                log(f"    [部门映射] 归一 {n_dept2}/{len(recs)} 条")
             recs = apply_view_filter(recs, spec, key)
             if spec.get("aging"):
                 compute_aging(recs, spec["aging"])

@@ -260,3 +260,8 @@ export async function exportCustomerPlatformDetail(params, filename) {
   })
   saveBlob(blob, filename)
 }
+
+/** 客户欠款 · 按产品线（2026-11-19）：手工维护的 xlsx，6 小时更新一次 */
+export function getCustomerDebt(params) {
+  return request.get('/customer-debt', { params })
+}

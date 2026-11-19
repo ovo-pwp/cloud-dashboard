@@ -62,6 +62,9 @@
             <el-menu-item index="/invoice-daily">
               <el-icon><Money /></el-icon><span>每日发货·回款</span>
             </el-menu-item>
+            <el-menu-item index="/customer-debt">
+              <el-icon><DataAnalysis /></el-icon><span>客户欠款·产品线</span>
+            </el-menu-item>
           </el-sub-menu>
 
           <!-- 子项目 2：客户平台未回款金额看板 -->

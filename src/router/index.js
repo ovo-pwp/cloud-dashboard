@@ -75,6 +75,15 @@ const routes = [
         meta: { title: '客户平台订单明细' },
       },
       {
+        // 「客户欠款 · 按产品线」独立页（2026-11-19）——
+        // 数据源是云文档里手工维护的 xlsx《客户欠款-按产品线拆分》，
+        // 提供另两条业务线都没有的维度：9 个产品线的欠款拆分 + 客户应收总表。
+        path: 'customer-debt',
+        name: 'CustomerDebt',
+        component: () => import('@/views/CustomerDebt.vue'),
+        meta: { title: '客户欠款·产品线' },
+      },
+      {
         // 「待处理优先级清单」是独立新增页（2026-09-29），
         // 不改动任何既有页面；数据来自只读接口 /api/priority/actions
         path: 'priority-actions',

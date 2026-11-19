@@ -4,6 +4,7 @@
  */
 import { Router } from 'express'
 import { query, normalizeDate } from '../db/pool.js'
+import { PRODUCT_LINES } from '../services/customerDebt.js'
 import { toDateOnly } from '../utils/date.js'
 import {
   startSync,
@@ -2528,6 +2529,98 @@ router.get('/trace', async (req, res, next) => {
     series.sort((a, b) => Number(b.inLatest) - Number(a.inLatest) || a.docNo.localeCompare(b.docNo))
 
     res.json({ query: raw, match: 'exact', series, candidates: [], latest })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ------------------------------------------------------------
+// GET /api/customer-debt  客户欠款 · 按产品线（2026-11-19 新增）
+//
+// 数据源：云文档里的普通表格文件「客户欠款-按产品线拆分.xlsx」（手工维护，6 小时拉一次）。
+// 相比另两条业务线，它多两个现在没有的维度：
+//   ① 9 个产品线的欠款拆分（立减金/营销礼品/活动策划/现代服务/渠道营销产品/
+//      自营场外引流订单/软件/场景获客）
+//   ② 客户应收总表（合同数 / 实际出库 / 开票金额 / 回款金额 / 合计应收）
+// 外加「备注」「沟通回款进度」两列，是销售跟进用的。
+//
+// 查询参数：q（客户名模糊）、dept（部门）、product（只看某个产品线有欠款的客户）
+// ------------------------------------------------------------
+router.get('/customer-debt', async (req, res, next) => {
+  try {
+    const { q = '', dept = '', product = '' } = req.query
+
+    const latest = await query(
+      `SELECT MAX(snapshot_date)::text AS d FROM customer_debt_product`
+    )
+    const snapshotDate = latest.rows[0]?.d
+    if (!snapshotDate) {
+      return res.json({
+        snapshotDate: null, summary: null, productLines: [], rows: [], productLineMeta: PRODUCT_LINES,
+      })
+    }
+
+    const where = ['snapshot_date = $1']
+    const params = [snapshotDate]
+    if (q) {
+      params.push(`%${q}%`)
+      where.push(`customer_name ILIKE $${params.length}`)
+    }
+    if (dept) {
+      params.push(dept)
+      where.push(`dept = $${params.length}`)
+    }
+    if (product) {
+      // ⚠️ 列名只能来自白名单常量（PRODUCT_LINES），**绝不能把请求参数拼进 SQL**
+      const pl = PRODUCT_LINES.find((p) => p.key === product)
+      where.push(pl ? `COALESCE("${pl.key}", 0) <> 0` : 'FALSE')
+    }
+    const whereSql = where.join(' AND ')
+
+    const rows = await query(
+      `SELECT customer_name, dept, salesperson, contract_count, shipped_amount, uninvoiced_amount,
+              invoice_count, invoiced_amount, paid_amount, unpaid_amount, total_receivable,
+              pl_lijianjin, pl_marketing_gift, pl_activity, pl_modern_service, pl_channel,
+              pl_outbound, pl_software, pl_scene, pl_check, remark, progress_note
+         FROM customer_debt_product
+        WHERE ${whereSql}
+        ORDER BY COALESCE(total_receivable, 0) DESC`,
+      params
+    )
+
+    // 汇总按**当前筛选结果**算（页面切了筛选，卡片跟着变，和别处口径一致）
+    const sum = (k) => rows.rows.reduce((a, r) => a + Number(r[k] || 0), 0)
+    const summary = {
+      customerCount: rows.rows.length,
+      totalReceivable: sum('total_receivable'),
+      uninvoicedAmount: sum('uninvoiced_amount'),
+      unpaidAmount: sum('unpaid_amount'),
+      shippedAmount: sum('shipped_amount'),
+      invoicedAmount: sum('invoiced_amount'),
+      paidAmount: sum('paid_amount'),
+      contractCount: sum('contract_count'),
+    }
+
+    // 产品线分布（按当前筛选结果）
+    const productLines = PRODUCT_LINES.map((p) => ({
+      key: p.key,
+      label: p.label,
+      amount: sum(p.key),
+      customerCount: rows.rows.filter((r) => Number(r[p.key] || 0) !== 0).length,
+    })).sort((a, b) => b.amount - a.amount)
+
+    res.json({
+      snapshotDate,
+      summary,
+      productLines,
+      productLineMeta: PRODUCT_LINES,
+      rows: rows.rows,
+      depts: (await query(
+        `SELECT DISTINCT dept FROM customer_debt_product
+          WHERE snapshot_date = $1 AND dept IS NOT NULL ORDER BY dept`,
+        [snapshotDate]
+      )).rows.map((r) => r.dept),
+    })
   } catch (err) {
     next(err)
   }
