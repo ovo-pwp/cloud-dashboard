@@ -1,6 +1,10 @@
 <template>
   <div class="container">
-    <!-- 2026-11-19 使用者定案：这一页不要页头、不要产品线分布表，只要明细 -->
+    <!-- 2026-11-19 使用者定案：
+         · 不要页头、不要产品线分布表，只要明细
+         · 不要「其中 3 个月以上」列
+         · 每一列都要能筛选
+         · 销售直接在看板里填进度，Excel 不再同步 -->
     <!-- 汇总 -->
     <el-row :gutter="12" class="sum-row">
       <el-col v-for="c in sumCards" :key="c.label" :span="6">
@@ -29,7 +33,8 @@
         {{ onlyUnpaid ? '✓ ' : '' }}只看有未回款
       </el-button>
       <el-button size="small" @click="load">刷新</el-button>
-      <span class="filter-tip">表头右侧 ▼ 可按「逾期」「金额」「销售反馈」筛选</span>
+      <el-button size="small" @click="clearTableFilters">清除列筛选</el-button>
+      <span class="filter-tip">每个列标题右侧的 ▼ 都能筛选</span>
     </el-card>
 
     <!-- 明细 -->
@@ -37,10 +42,11 @@
       <template #header>
         <span class="card-title">客户明细（{{ rows.length }}）</span>
         <span class="card-hint">
-          数据全部来自利润管控系统（每天自动取数后在系统内汇总）；产品线＝已发货未开票按产品线拆分
+          数据全部来自利润管控系统（每天自动取数后在系统内汇总）；点「销售反馈」即可填写进度
         </span>
       </template>
       <el-table
+        ref="tableRef"
         :data="rows"
         border
         size="small"
@@ -48,62 +54,147 @@
         :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
         :cell-style="{ padding: '6px 0' }"
       >
-        <el-table-column prop="customer_name" label="挂账客户" min-width="220" fixed="left" show-overflow-tooltip />
-        <el-table-column prop="dept" label="部门" width="110" show-overflow-tooltip />
-        <el-table-column prop="salesperson" label="业务员" width="95" show-overflow-tooltip />
+        <!-- 客户 -->
+        <el-table-column
+          prop="customer_name"
+          label="挂账客户"
+          min-width="220"
+          fixed="left"
+          show-overflow-tooltip
+          :filters="customerFilters"
+          :filter-method="filterCustomer"
+          filter-placement="bottom-end"
+        />
 
-        <el-table-column prop="contract_count" label="合同数" width="80" align="right" />
-        <el-table-column prop="ship_amount" label="实际出库金额" width="140" align="right">
+        <!-- 部门 -->
+        <el-table-column
+          prop="dept"
+          label="部门"
+          width="115"
+          show-overflow-tooltip
+          :filters="deptFilters"
+          :filter-method="filterDept"
+          filter-placement="bottom-end"
+        />
+
+        <!-- 业务员 -->
+        <el-table-column
+          prop="salesperson"
+          label="业务员"
+          width="100"
+          show-overflow-tooltip
+          :filters="salesmanFilters"
+          :filter-method="filterSalesman"
+          filter-placement="bottom-end"
+        />
+
+        <!-- 合同数 -->
+        <el-table-column
+          prop="contract_count"
+          label="合同数"
+          width="90"
+          align="right"
+          :filters="countFilters"
+          :filter-method="filterCount('contract_count')"
+          filter-placement="bottom-end"
+        />
+
+        <!-- 实际出库金额 -->
+        <el-table-column
+          prop="ship_amount"
+          label="实际出库金额"
+          width="140"
+          align="right"
+          :filters="amountFilters"
+          :filter-method="filterAmount('ship_amount')"
+          filter-placement="bottom-end"
+        >
           <template #default="{ row }"><span class="mx-amt">{{ num(row.ship_amount) }}</span></template>
         </el-table-column>
-        <el-table-column label="已发货未开票" width="150" align="right">
+
+        <!-- 已发货未开票 -->
+        <el-table-column
+          prop="uninvoiced_amount"
+          label="已发货未开票"
+          width="150"
+          align="right"
+          :filters="amountFilters"
+          :filter-method="filterAmount('uninvoiced_amount')"
+          filter-placement="bottom-end"
+        >
           <template #default="{ row }">
             <span class="mx-amt">{{ num(row.uninvoiced_amount) }}</span>
             <span class="mx-sub">{{ row.uninvoiced_count || 0 }} 单</span>
           </template>
         </el-table-column>
-        <el-table-column prop="invoice_count" label="开票方案数" width="95" align="right" />
-        <el-table-column prop="invoiced_amount" label="开票金额" width="140" align="right">
+
+        <!-- 开票方案数 -->
+        <el-table-column
+          prop="invoice_count"
+          label="开票方案数"
+          width="100"
+          align="right"
+          :filters="countFilters"
+          :filter-method="filterCount('invoice_count')"
+          filter-placement="bottom-end"
+        />
+
+        <!-- 开票金额 -->
+        <el-table-column
+          prop="invoiced_amount"
+          label="开票金额"
+          width="140"
+          align="right"
+          :filters="amountFilters"
+          :filter-method="filterAmount('invoiced_amount')"
+          filter-placement="bottom-end"
+        >
           <template #default="{ row }"><span class="mx-amt">{{ num(row.invoiced_amount) }}</span></template>
         </el-table-column>
-        <el-table-column prop="paid_amount" label="回款金额" width="140" align="right">
+
+        <!-- 回款金额 -->
+        <el-table-column
+          prop="paid_amount"
+          label="回款金额"
+          width="140"
+          align="right"
+          :filters="amountFilters"
+          :filter-method="filterAmount('paid_amount')"
+          filter-placement="bottom-end"
+        >
           <template #default="{ row }"><span class="mx-amt">{{ num(row.paid_amount) }}</span></template>
         </el-table-column>
-        <el-table-column label="已开票未回款" width="150" align="right">
+
+        <!-- 已开票未回款 -->
+        <el-table-column
+          prop="unpaid_amount"
+          label="已开票未回款"
+          width="150"
+          align="right"
+          :filters="amountFilters"
+          :filter-method="filterAmount('unpaid_amount')"
+          filter-placement="bottom-end"
+        >
           <template #default="{ row }">
             <span class="mx-amt">{{ num(row.unpaid_amount) }}</span>
             <span class="mx-sub">{{ row.unpaid_count || 0 }} 单</span>
           </template>
         </el-table-column>
-        <el-table-column
-          label="其中 3 个月以上"
-          width="140"
-          align="right"
-          :filters="overdueFilters"
-          :filter-method="filterOverdue"
-          filter-placement="bottom-end"
-        >
-          <template #default="{ row }">
-            <span
-              class="mx-amt"
-              :class="{ 'mx-danger': Number(row.unpaid_over3m || 0) + Number(row.uninvoiced_over3m || 0) > 0 }"
-            >
-              {{ num((row.unpaid_over3m || 0) + (row.uninvoiced_over3m || 0)) }}
-            </span>
-          </template>
-        </el-table-column>
+
+        <!-- 合计应收 -->
         <el-table-column
           prop="total_receivable"
           label="合计应收"
-          width="145"
+          width="150"
           align="right"
           :filters="amountFilters"
-          :filter-method="filterAmount"
+          :filter-method="filterAmount('total_receivable')"
           filter-placement="bottom-end"
         >
           <template #default="{ row }"><span class="mx-amt strong">{{ num(row.total_receivable) }}</span></template>
         </el-table-column>
 
+        <!-- 8 个产品线 -->
         <el-table-column
           v-for="p in productLineMeta"
           :key="p.key"
@@ -111,6 +202,9 @@
           :label="p.label"
           width="125"
           align="right"
+          :filters="productFilters"
+          :filter-method="filterProduct(p.key)"
+          filter-placement="bottom-end"
         >
           <template #default="{ row }">
             <span v-if="Number(row[p.key] || 0) !== 0" class="mx-amt">{{ num(row[p.key]) }}</span>
@@ -118,6 +212,7 @@
           </template>
         </el-table-column>
 
+        <!-- 销售反馈（可编辑） -->
         <el-table-column
           label="销售反馈"
           min-width="290"
@@ -140,24 +235,12 @@
             />
             <div v-else class="fb-list">
               <div class="fb-item" :class="{ 'fb-edit': canEditDetail }" @click="startEdit(row)">
-                <el-tag size="small" type="success" effect="plain">看板</el-tag>
+                <el-tag size="small" type="success" effect="plain">反馈</el-tag>
                 <el-tooltip v-if="row.board_note" :content="row.board_note" placement="top" :show-after="300">
                   <span class="fb-text">{{ row.board_note }}</span>
                 </el-tooltip>
-                <span v-else class="fb-text fb-muted">{{ canEditDetail ? '点击填写进度反馈' : '未填写' }}</span>
+                <span v-else class="fb-text fb-muted">{{ canEditDetail ? '点击填写进度' : '未填写' }}</span>
                 <span v-if="row.board_note_at" class="mx-sub">{{ fmtTime(row.board_note_at) }}</span>
-              </div>
-              <div v-if="row.excel_progress" class="fb-item">
-                <el-tag size="small" type="warning" effect="plain">源表</el-tag>
-                <el-tooltip :content="row.excel_progress" placement="top" :show-after="300">
-                  <span class="fb-text">{{ row.excel_progress }}</span>
-                </el-tooltip>
-              </div>
-              <div v-if="row.excel_remark" class="fb-item">
-                <el-tag size="small" type="info" effect="plain">备注</el-tag>
-                <el-tooltip :content="row.excel_remark" placement="top" :show-after="300">
-                  <span class="fb-text">{{ row.excel_remark }}</span>
-                </el-tooltip>
               </div>
             </div>
           </template>
@@ -183,6 +266,7 @@ const summary = ref(null)
 const productLineMeta = ref([])
 const rows = ref([])
 const depts = ref([])
+const tableRef = ref(null)
 
 // ====== 进度反馈就地编辑（与「明细查询」「我的业绩」同一套交互）======
 // 键用客户名（本页是客户级，没有行 id）；存库仍按 **单据号**
@@ -229,46 +313,119 @@ async function saveNote(row) {
   }
 }
 
-// ====== 表头列筛选 ======
-const overdueFilters = [
-  { text: '全部', value: 'all' },
-  { text: '有 3 个月以上逾期', value: 'overdue' },
-  { text: '无逾期', value: 'none' },
+// ====== 列筛选器（每一列都有）======
+const ALL = { text: '全部', value: 'all' }
+
+/** 金额列：0 / 非 0 / 10万 / 50万 / 100万 */
+const amountFilters = [
+  ALL,
+  { text: '无（0）', value: 'zero' },
+  { text: '有金额', value: 'nonzero' },
+  { text: '≥ 10 万', value: 'w10' },
+  { text: '≥ 50 万', value: 'w50' },
+  { text: '≥ 100 万', value: 'w100' },
 ]
-function filterOverdue({ row, value }) {
-  const over = Number(row.unpaid_over3m || 0) + Number(row.uninvoiced_over3m || 0)
-  if (value === 'overdue') return over > 0
-  if (value === 'none') return over <= 0
+function filterAmount(field) {
+  return ({ row, value }) => {
+    const n = Number(row[field] || 0)
+    if (value === 'zero') return n === 0
+    if (value === 'nonzero') return n !== 0
+    if (value === 'w10') return n >= 100000
+    if (value === 'w50') return n >= 500000
+    if (value === 'w100') return n >= 1000000
+    return true
+  }
+}
+
+/** 整数列（合同数 / 开票方案数） */
+const countFilters = [
+  ALL,
+  { text: '无（0）', value: 'zero' },
+  { text: '有', value: 'nonzero' },
+  { text: '≥ 3', value: 'c3' },
+  { text: '≥ 10', value: 'c10' },
+]
+function filterCount(field) {
+  return ({ row, value }) => {
+    const n = Number(row[field] || 0)
+    if (value === 'zero') return n === 0
+    if (value === 'nonzero') return n > 0
+    if (value === 'c3') return n >= 3
+    if (value === 'c10') return n >= 10
+    return true
+  }
+}
+
+/** 产品线列：0 / 非 0 / 10万 / 50万 */
+const productFilters = [
+  ALL,
+  { text: '无（0）', value: 'zero' },
+  { text: '有金额', value: 'nonzero' },
+  { text: '≥ 10 万', value: 'w10' },
+  { text: '≥ 50 万', value: 'w50' },
+]
+function filterProduct(field) {
+  return ({ row, value }) => {
+    const n = Number(row[field] || 0)
+    if (value === 'zero') return n === 0
+    if (value === 'nonzero') return n !== 0
+    if (value === 'w10') return n >= 100000
+    if (value === 'w50') return n >= 500000
+    return true
+  }
+}
+
+/** 客户列 */
+const customerFilters = [
+  ALL,
+  { text: '有未回款', value: 'unpaid' },
+  { text: '无未回款', value: 'nounpaid' },
+  { text: '有未开票', value: 'uninvoiced' },
+]
+function filterCustomer({ row, value }) {
+  if (value === 'unpaid') return Number(row.unpaid_amount || 0) > 0
+  if (value === 'nounpaid') return Number(row.unpaid_amount || 0) === 0
+  if (value === 'uninvoiced') return Number(row.uninvoiced_amount || 0) > 0
   return true
 }
 
-const amountFilters = [
-  { text: '全部', value: 'all' },
-  { text: '≥ 10 万', value: '10' },
-  { text: '≥ 50 万', value: '50' },
-  { text: '≥ 100 万', value: '100' },
-]
-function filterAmount({ row, value }) {
-  if (value === 'all') return true
-  const w = Number(value || 0) * 10000
-  return Number(row.total_receivable || 0) >= w
+/** 部门 / 业务员：按当前数据动态生成选项 */
+function distinctFilters(field) {
+  return computed(() => {
+    const set = new Set()
+    rows.value.forEach((r) => {
+      const v = (r[field] || '').trim()
+      if (v) set.add(v)
+    })
+    return [ALL, ...[...set].sort().map((v) => ({ text: v, value: v }))]
+  })
 }
+const deptFilters = distinctFilters('dept')
+const salesmanFilters = distinctFilters('salesperson')
+function matchField(field) {
+  return ({ row, value }) => (value === 'all' ? true : (row[field] || '') === value)
+}
+const filterDept = matchField('dept')
+const filterSalesman = matchField('salesperson')
 
+/** 销售反馈 */
 const feedbackFilters = [
-  { text: '全部', value: 'all' },
+  ALL,
   { text: '有反馈', value: 'any' },
   { text: '无反馈', value: 'none' },
-  { text: '仅看板填了', value: 'board' },
-  { text: '仅源表填了', value: 'excel' },
 ]
 function filterFeedback({ row, value }) {
-  const b = !!row.board_note
-  const e = !!row.excel_progress || !!row.excel_remark
-  if (value === 'any') return b || e
-  if (value === 'none') return !b && !e
-  if (value === 'board') return b && !e
-  if (value === 'excel') return e && !b
+  if (value === 'any') return !!row.board_note
+  if (value === 'none') return !row.board_note
   return true
+}
+
+/** 一键清掉所有列筛选（表头那些 ▼ 的选中项） */
+function clearTableFilters() {
+  const t = tableRef.value
+  if (!t) return
+  t.clearFilter()
+  ElMessage.success('已清除列筛选')
 }
 
 const sumCards = computed(() => {
@@ -277,7 +434,7 @@ const sumCards = computed(() => {
   return [
     { label: '合计应收（元）', value: s.totalReceivable, sub: `${s.customerCount} 个客户` },
     { label: '已发货未开票（元）', value: s.uninvoicedAmount, sub: '货已发、票未开' },
-    { label: '已开票未回款（元）', value: s.unpaidAmount, sub: `其中 3 个月以上 ${num(s.unpaidOver3m)}` },
+    { label: '已开票未回款（元）', value: s.unpaidAmount, sub: '票已开、钱未收' },
     {
       label: '有销售反馈的客户',
       value: s.withFeedback,
@@ -354,7 +511,6 @@ onMounted(load)
 
 .mx-amt { font-variant-numeric: tabular-nums; }
 .mx-amt.strong { font-weight: 500; color: #2c3e50; }
-.mx-amt.mx-danger { color: #cf1322; }
 .mx-sub { font-size: 11px; color: #a8abb2; margin-left: 6px; }
 .mx-zero { color: #c0c4cc; }
 

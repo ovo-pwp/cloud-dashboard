@@ -26,8 +26,6 @@ import {
   importCustomerPlatformUnpaid,
   CUSTOMER_PLATFORM_BIZ_TYPE,
 } from './services/importer.js'
-// 客户欠款·按产品线（2026-11-19）：手工维护的 xlsx，6 小时拉一次
-import { importCustomerDebt, CUSTOMER_DEBT_BIZ_TYPE } from './services/customerDebt.js'
 // 每天备份一次数据库：历史快照不可再生（源表只有「当前状态」），丢了无法重建
 import { runBackup } from './services/dbBackup.js'
 // 「当日回款」自动标注：判断每笔是真回款 / 补录 / 源表删行（2026-10-27 使用者要求「每天都是这样」）
@@ -80,8 +78,6 @@ const TABLE_SPECS = [
   { bizType: CUSTOMER_INVOICE_BIZ_TYPE, outName: CUSTOMER_INVOICE_OUT_NAME },
   // ⚠️ 2026-10-12 补：客户对账明细表（123）—— 先前漏了，导致「每日发货·回款」的左侧数据不更新
   { bizType: 'customer_recon', outName: '(客户对账明细表)对账.xlsx' },
-  // ⚠️ 2026-11-19 新增：客户欠款·按产品线（普通表格 xlsx，手工维护 ⇒ 与报表同组降频）
-  { bizType: CUSTOMER_DEBT_BIZ_TYPE, outName: '(客户欠款-按产品线)客户欠款.xlsx' },
 ]
 
 // ------------------------------------------------------------
@@ -96,7 +92,7 @@ const TABLE_SPECS = [
 //   两张报表每 REPORTS_REFRESH_HOURS 小时才拉一次，其余轮次连导入也一起跳过
 //   （不导旧文件，避免拿陈旧 xlsx 去全量替换，也省掉无谓的写库）。
 // ------------------------------------------------------------
-const REPORT_BIZ_TYPES = new Set([CUSTOMER_INVOICE_BIZ_TYPE, 'customer_recon', CUSTOMER_DEBT_BIZ_TYPE])
+const REPORT_BIZ_TYPES = new Set([CUSTOMER_INVOICE_BIZ_TYPE, 'customer_recon'])
 const CORE_SPECS = TABLE_SPECS.filter((s) => !REPORT_BIZ_TYPES.has(s.bizType))
 const REPORT_SPECS = TABLE_SPECS.filter((s) => REPORT_BIZ_TYPES.has(s.bizType))
 
@@ -245,11 +241,6 @@ async function importFile(tableSpec) {
       result = await importCustomerPlatformUnpaid(pool, { xlsxPath: filePath, snapshotDate })
       log('  ✓ ' + tableSpec.outName + ': ' + result.inserted + ' 条，金额 ' +
           result.totalAmount.toLocaleString('en-US') + '（跳过 ' + result.skippedCount + ' 行）')
-    } else if (tableSpec.bizType === CUSTOMER_DEBT_BIZ_TYPE) {
-      // 客户欠款·按产品线（2026-11-19）：手工维护的当前态表，按快照日期全量替换
-      result = await importCustomerDebt(pool, { xlsxPath: filePath, snapshotDate })
-      log('  ✓ ' + tableSpec.outName + ': ' + result.inserted + ' 条，合计应收 ' +
-          result.totalReceivable.toLocaleString('en-US') + '（跳过 ' + result.skippedCount + ' 行）')
     } else {
       result = await importExcel(pool, { bizType: tableSpec.bizType, xlsxPath: filePath, snapshotDate })
       log('  ✓ ' + tableSpec.outName + ': ' + result.inserted + ' 条，金额 ' +

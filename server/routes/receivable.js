@@ -4,7 +4,7 @@
  */
 import { Router } from 'express'
 import { query, normalizeDate } from '../db/pool.js'
-import { PRODUCT_LINES } from '../services/customerDebt.js'
+import { PRODUCT_LINES } from '../services/productLines.js'
 import { toDateOnly } from '../utils/date.js'
 import {
   startSync,
@@ -2582,8 +2582,7 @@ router.get('/customer-debt', async (req, res, next) => {
     //   receivable_detail  ← 已开票未回款 / 已发货未开票（单据级，最新批次）
     //   customer_recon     ← 客户对账明细表(123)：合同数、实际出库金额、**产品线**
     //   customer_invoice   ← 客户开票明细表(26)：开票方案数、开票金额、回款金额
-    //   detail_note        ← 销售在看板里填的进度反馈
-    //   customer_debt_product ← 手工 Excel（**只取**销售写的沟通进度/备注，不取金额）
+    //   detail_note        ← 销售在看板里填的进度反馈（销售直接在这里填，不走 Excel）
     const rows = await query(
       `WITH live AS (
          SELECT d.customer_name,
@@ -2656,16 +2655,12 @@ router.get('/customer-debt', async (req, res, next) => {
               COALESCE(rc.pl_outbound, 0)::float8       AS pl_outbound,
               COALESCE(rc.pl_software, 0)::float8       AS pl_software,
               COALESCE(rc.pl_scene, 0)::float8          AS pl_scene,
-              xl.remark AS excel_remark, xl.progress_note AS excel_progress,
               fb.note AS board_note, fb.updated_at AS board_note_at,
               COALESCE(fb.doc_no, rep.doc_no)     AS note_doc_no,
               COALESCE(fb.biz_type, rep.biz_type) AS note_biz_type
          FROM live
          LEFT JOIN rc ON rc.customer = live.customer_name
          LEFT JOIN iv ON iv.customer = live.customer_name
-         LEFT JOIN customer_debt_product xl
-                ON xl.customer_name = live.customer_name
-               AND xl.snapshot_date = (SELECT MAX(snapshot_date) FROM customer_debt_product)
          LEFT JOIN fb ON fb.customer_name = live.customer_name AND fb.rn = 1
          LEFT JOIN rep ON rep.customer_name = live.customer_name AND rep.rn = 1
         WHERE 1=1 ${whereSql}
@@ -2682,8 +2677,8 @@ router.get('/customer-debt', async (req, res, next) => {
       unpaidAmount: sum('unpaid_amount'),
       uninvoicedOver3m: sum('uninvoiced_over3m'),
       unpaidOver3m: sum('unpaid_over3m'),
-      withFeedback: list.filter((r) => r.board_note || r.excel_progress || r.excel_remark).length,
-      matchedProduct: list.filter((r) => r.pl_check !== null || r.pl_lijianjin !== null).length,
+      withFeedback: list.filter((r) => r.board_note).length,
+      matchedProduct: list.filter((r) => PRODUCT_LINES.some((p) => Number(r[p.key] || 0) !== 0)).length,
     }
 
     // 产品线分布（按当前筛选结果）
