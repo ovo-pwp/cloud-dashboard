@@ -15,6 +15,7 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { resolveExecutable } from './utils/executable.js'
 import path from 'path'
@@ -32,6 +33,13 @@ import { runBackup } from './services/dbBackup.js'
 import { refreshPayInfo, autoAnnotatePayments } from './services/autoNote.js'
 // 客户欠款 · 每日快照（2026-11-19 使用者：「每天的变化记录起来，好知道有没有发生变化」）
 import { writeCustomerDailySnapshot } from './services/customerDaily.js'
+
+/**
+ * 抓取前要求的**系统可用内存**下限（MB）。
+ * 低于这个值就不启动 Python 拉数（2026-11-19：内存不足导致进程被系统终止）。
+ * 可用环境变量 SYNC_MIN_FREE_MEM_MB 调整；设成 0 可关闭这个闸门。
+ */
+const SYNC_MIN_FREE_MEM_MB = Math.max(0, Number(process.env.SYNC_MIN_FREE_MEM_MB) || 700)
 import {
   CUSTOMER_INVOICE_BIZ_TYPE,
   CUSTOMER_INVOICE_OUT_NAME,
@@ -299,6 +307,16 @@ async function runSyncTick() {
   let okAll = false
   let message = ''
   try {
+    // 🔴 2026-11-19 内存闸门：本机 15.8G 物理内存 + 3G 页面文件 = 18.8G 提交上限，
+    //   实际提交量长期顶到 19~23G ⇒ 拉数的 Python 进程一起来就被系统终止
+    //   （exit=3221225786 = 0xC000013A，日志里显示「多半是内存不足」）。
+    //   与其让它跑一半被杀，不如**本轮干脆不启动**，留到内存缓和时再同步。
+    const freeMB = Math.round(os.freemem() / 1024 / 1024)
+    if (freeMB < SYNC_MIN_FREE_MEM_MB) {
+      message = `定时同步：系统可用内存仅 ${freeMB} MB（阈值 ${SYNC_MIN_FREE_MEM_MB} MB），本轮跳过抓取，等内存缓和后自动恢复`
+      log(message)
+      return 'skipped'
+    }
     const withReports = reportsDue()
     const { ok } = await pull(withReports)
     if (!ok) {
