@@ -13,7 +13,11 @@
           <span class="card-title">
             客户明细（{{ filteredRows.length }}<template v-if="filteredRows.length !== rows.length"> / {{ rows.length }}</template>）
           </span>
-          <!-- 全体合计走势：一眼看整体在涨还是在降 -->
+          <!-- 已生效的筛选条件：0 条时最容易「不知道为什么没数据」，这里明示 -->
+          <span v-if="activeFilterText" class="active-filters">
+            <span class="af-label">筛选中：</span>{{ activeFilterText }}
+            <el-button link type="primary" size="small" @click="clearFilters">全部清除</el-button>
+          </span>
           <span v-if="trend && trend.axis && trend.axis.length >= 2" class="trend-bar">
             <span class="trend-label">近 {{ trend.axis.length }} 日</span>
             <svg width="64" height="18" class="spark">
@@ -148,6 +152,16 @@
         :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
         :cell-style="{ padding: '6px 0' }"
       >
+        <template #empty>
+          <div class="empty-tip">
+            <p>没有符合条件的客户</p>
+            <p v-if="activeFilterText" class="empty-sub">
+              当前筛选：{{ activeFilterText }}
+              <el-button link type="primary" size="small" @click="clearFilters">全部清除</el-button>
+            </p>
+            <p v-else class="empty-sub">试试清空客户名搜索框，或点「清除」重置全部条件</p>
+          </div>
+        </template>
         <el-table-column prop="customer_name" label="挂账客户" min-width="220" fixed="left" show-overflow-tooltip />
         <el-table-column prop="dept" label="部门" width="115" show-overflow-tooltip />
         <el-table-column prop="salesperson" label="业务员" width="100" show-overflow-tooltip />
@@ -290,8 +304,14 @@ const salesmanList = computed(() => {
 
 const filteredRows = computed(() => {
   const kw = q.value.trim()
+  // 客户名搜索：忽略分隔符/空格比对 ⇒「赵国莹」「个金部赵国莹」「金部-赵国莹」都能命中
+  const kwFlat = kw.replace(/[-\s—–－]/g, '')
   return rows.value.filter((r) => {
-    if (kw && !String(r.customer_name || '').includes(kw)) return false
+    if (kw) {
+      const nm = String(r.customer_name || '')
+      const nmFlat = nm.replace(/[-\s—–－]/g, '')
+      if (!nm.includes(kw) && !(kwFlat && nmFlat.includes(kwFlat))) return false
+    }
     if (fDept.value.length && !fDept.value.includes(r.dept)) return false
     if (fSalesman.value.length && !fSalesman.value.includes(r.salesperson)) return false
     // 产品线：选中任一产品线，即显示「该产品线有金额」的客户
@@ -330,6 +350,35 @@ const filteredRows = computed(() => {
     }
     return true
   })
+})
+
+/** 当前生效的筛选条件（人话），0 条结果时用来解释「为什么没数据」 */
+const activeFilterText = computed(() => {
+  const parts = []
+  if (q.value.trim()) parts.push(`客户名含「${q.value.trim()}」`)
+  if (fDept.value.length) parts.push(`部门 ${fDept.value.join('/')}`)
+  if (fSalesman.value.length) parts.push(`业务员 ${fSalesman.value.join('/')}`)
+  if (fProduct.value.length) {
+    const names = fProduct.value.map((k) => {
+      const m = productLineMeta.value.find((p) => p.key === k)
+      return m ? m.label : k
+    })
+    parts.push(`产品线 ${names.join('/')}`)
+  }
+  if (fFeedback.value.length) parts.push(fFeedback.value.includes('any') ? '有反馈' : '无反馈')
+  if (fDiff.value.length) {
+    const map = { changed: '有变化', up: '增加', down: '减少', new: '新增' }
+    parts.push(`较昨日 ${fDiff.value.map((v) => map[v] || v).join('/')}`)
+  }
+  if (fTrend.value.length) {
+    const map = { up: '近8日上升', down: '近8日下降', flat: '走平', new: '新出现' }
+    parts.push(`趋势 ${fTrend.value.map((v) => map[v] || v).join('/')}`)
+  }
+  if (fAmount.value.length) {
+    const map = { any: '有金额', 10: '≥10万', 50: '≥50万', 100: '≥100万' }
+    parts.push(`合计应收 ${fAmount.value.map((v) => map[v] || v).join('/')}`)
+  }
+  return parts.join(' + ')
 })
 
 function clearFilters() {
@@ -514,6 +563,22 @@ onMounted(load)
 }
 .trend-label { font-size: 12px; color: #909399; }
 .trend-diff { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.active-filters {
+  font-size: 12px;
+  color: #606266;
+  background: #fdf6ec;
+  border: 1px solid #faecd8;
+  border-radius: 4px;
+  padding: 2px 8px;
+  max-width: 560px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.af-label { color: #e6a23c; }
+.empty-tip { padding: 24px 0; color: #909399; font-size: 13px; }
+.empty-tip p { margin: 4px 0; }
+.empty-sub { font-size: 12px; color: #a8abb2; }
 
 .fb-list { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
 .fb-item { display: flex; align-items: baseline; gap: 6px; line-height: 1.6; }
