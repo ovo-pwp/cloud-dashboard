@@ -13,11 +13,32 @@
           <span class="card-title">
             客户明细（{{ filteredRows.length }}<template v-if="filteredRows.length !== rows.length"> / {{ rows.length }}</template>）
           </span>
-          <div class="filters">
-            <el-input
-              v-model="q"
-              placeholder="客户名"
-              clearable
+          <!-- 全体合计走势：一眼看整体在涨还是在降 -->
+          <span v-if="trend && trend.axis && trend.axis.length >= 2" class="trend-bar">
+            <span class="trend-label">近 {{ trend.axis.length }} 日</span>
+            <svg width="64" height="18" class="spark">
+              <polyline
+                :points="sparkPoints(trend.series)"
+                fill="none"
+                :stroke="trendStroke"
+                stroke-width="1.5"
+                stroke-linejoin="round"
+                stroke-linecap="round"
+              />
+            </svg>
+            <span
+              class="trend-diff"
+              :class="trend.diff > 0 ? 'mx-up' : trend.diff < 0 ? 'mx-down' : 'mx-zero'"
+            >{{ trend.diff > 0 ? '+' : '' }}{{ shortNum(trend.diff) }}</span>
+            <span class="mx-sub">{{ trend.pct === null ? '' : (trend.pct > 0 ? '+' : '') + trend.pct.toFixed(1) + '%' }}</span>
+          </span>
+        </div>
+        <!-- 筛选单独一行：控件多，和标题挤一行会把走势条挤没 -->
+        <div class="filters">
+          <el-input
+            v-model="q"
+            placeholder="客户名"
+            clearable
               size="small"
               style="width:140px"
             />
@@ -86,6 +107,21 @@
               <el-option label="新增客户" value="new" />
             </el-select>
             <el-select
+              v-model="fTrend"
+              multiple
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="趋势"
+              clearable
+              size="small"
+              style="width:115px"
+            >
+              <el-option label="近 8 日上升" value="up" />
+              <el-option label="近 8 日下降" value="down" />
+              <el-option label="走平" value="flat" />
+              <el-option label="新出现" value="new" />
+            </el-select>
+            <el-select
               v-model="fAmount"
               multiple
               collapse-tags
@@ -101,7 +137,6 @@
               <el-option label="≥ 100 万" value="100" />
             </el-select>
             <el-button size="small" @click="clearFilters">清除</el-button>
-          </div>
         </div>
       </template>
 
@@ -140,6 +175,30 @@
         </el-table-column>
         <el-table-column prop="total_receivable" label="合计应收" width="150" align="right">
           <template #default="{ row }"><span class="mx-amt strong">{{ num(row.total_receivable) }}</span></template>
+        </el-table-column>
+
+        <!-- 近 8 日走势（每天一份快照，一眼看趋势） -->
+        <el-table-column label="近 8 日走势" width="130" align="center">
+          <template #default="{ row }">
+            <div class="spark-wrap">
+              <svg width="66" height="20" class="spark">
+                <polyline
+                  :points="sparkPoints(row.spark)"
+                  fill="none"
+                  :stroke="sparkColor(row)"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                  stroke-linecap="round"
+                />
+              </svg>
+              <span
+                class="spark-diff"
+                :class="row.sparkDiff > 0.005 ? 'mx-up' : row.sparkDiff < -0.005 ? 'mx-down' : 'mx-zero'"
+              >
+                {{ row.sparkDiff === null ? '—' : (row.sparkDiff > 0 ? '+' : '') + shortNum(row.sparkDiff) }}
+              </span>
+            </div>
+          </template>
         </el-table-column>
 
         <!-- 较昨日变化（每天的快照对比） -->
@@ -211,6 +270,7 @@ const summary = ref(null)
 const productLineMeta = ref([])
 const rows = ref([])
 const depts = ref([])
+const trend = ref(null)
 
 // ====== 筛选（标题栏上一排下拉，可多选）======
 const q = ref('')
@@ -219,6 +279,7 @@ const fSalesman = ref([])
 const fProduct = ref([])
 const fFeedback = ref([])
 const fDiff = ref([])
+const fTrend = ref([])
 const fAmount = ref([])
 
 const salesmanList = computed(() => {
@@ -250,6 +311,18 @@ const filteredRows = computed(() => {
       })
       if (!ok) return false
     }
+    if (fTrend.value.length) {
+      const sd = r.sparkDiff
+      const ok = fTrend.value.some((v) => {
+        if (v === 'new') return r.sparkStart === null || sd === null
+        if (sd === null) return false
+        if (v === 'up') return sd >= 0.005
+        if (v === 'down') return sd <= -0.005
+        if (v === 'flat') return Math.abs(sd) < 0.005
+        return true
+      })
+      if (!ok) return false
+    }
     if (fAmount.value.length) {
       const t = Number(r.total_receivable || 0)
       const ok = fAmount.value.some((v) => (v === 'any' ? t !== 0 : t >= Number(v) * 10000))
@@ -266,7 +339,53 @@ function clearFilters() {
   fProduct.value = []
   fFeedback.value = []
   fDiff.value = []
+  fTrend.value = []
   fAmount.value = []
+}
+
+// ====== 走势迷你图（SVG 折线，不引图表库）======
+/** 把金额数组转成 SVG polyline 的 points（null 的点跳过） */
+function sparkPoints(arr, w = 66, h = 20) {
+  if (!Array.isArray(arr) || arr.length < 2) return ''
+  const pts = arr.map((v, i) => ({ v, i })).filter((p) => p.v !== null && p.v !== undefined)
+  if (pts.length < 2) return ''
+  const vals = pts.map((p) => Number(p.v))
+  const min = Math.min(...vals)
+  const max = Math.max(...vals)
+  const span = max - min || 1
+  const stepX = w / (arr.length - 1)
+  const pad = 1.5
+  return pts
+    .map((p) => {
+      const x = (p.i * stepX).toFixed(1)
+      const y = (pad + (1 - (Number(p.v) - min) / span) * (h - pad * 2)).toFixed(1)
+      return `${x},${y}`
+    })
+    .join(' ')
+}
+
+/** 折线颜色：涨红、跌绿（中国市场习惯）、走平灰 */
+function sparkColor(row) {
+  const d = row && row.sparkDiff
+  if (d === null || d === undefined) return '#c0c4cc'
+  if (Math.abs(d) < 0.005) return '#909399'
+  return d > 0 ? '#cf1322' : '#389e0d'
+}
+
+const trendStroke = computed(() => {
+  const t = trend.value
+  if (!t || t.diff === null || t.diff === undefined) return '#c0c4cc'
+  if (Math.abs(t.diff) < 0.005) return '#909399'
+  return t.diff > 0 ? '#cf1322' : '#389e0d'
+})
+
+/** 大额简称：12345678 → 1234.6万 */
+function shortNum(v) {
+  const n = Number(v || 0)
+  const abs = Math.abs(n)
+  if (abs >= 1e8) return (n / 1e8).toFixed(2) + '亿'
+  if (abs >= 1e4) return (n / 1e4).toFixed(1) + '万'
+  return n.toFixed(0)
 }
 
 // ====== 进度反馈就地编辑（与「明细查询」「我的业绩」同一套交互）======
@@ -335,6 +454,7 @@ async function load() {
     const d = await getCustomerDebt()
     summary.value = d.summary
     productLineMeta.value = d.productLineMeta || []
+    trend.value = d.trend || null
     rows.value = d.rows || []
     depts.value = d.depts || []
   } catch (e) {
@@ -350,16 +470,17 @@ onMounted(load)
 .card-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
 }
+.trend-bar { margin-left: auto; }
 .card-title { font-weight: 500; color: #2c3e50; white-space: nowrap; }
 .filters {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-top: 8px;
 }
 
 .mx-amt { font-variant-numeric: tabular-nums; }
@@ -377,6 +498,22 @@ onMounted(load)
   color: #1677ff;
   font-size: 11px;
 }
+
+/* 走势迷你图 */
+.spark-wrap { display: flex; align-items: center; justify-content: center; gap: 4px; }
+.spark { display: block; }
+.spark-diff { font-size: 11px; font-variant-numeric: tabular-nums; }
+.trend-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(144, 147, 153, 0.08);
+}
+.trend-label { font-size: 12px; color: #909399; }
+.trend-diff { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
 
 .fb-list { display: flex; flex-direction: column; gap: 2px; padding: 2px 0; }
 .fb-item { display: flex; align-items: baseline; gap: 6px; line-height: 1.6; }

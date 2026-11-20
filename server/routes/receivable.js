@@ -2690,6 +2690,43 @@ router.get('/customer-debt', async (req, res, next) => {
     )
 
     const list = rows.rows
+
+    // ── 近 8 天走势（2026-11-20 使用者：「怎么样能够快速的看出趋势」）──
+    // 数据源就是每日快照表 customer_debt_daily（每天一份客户级金额）。
+    // 一次查出近 8 天所有客户 × 所有天的点，在内存里按客户聚合，避免 N+1 查询。
+    const trendRows = await query(
+      `SELECT customer_name, to_char(snapshot_date,'MM-DD') AS d, total_receivable::float8 AS v
+         FROM customer_debt_daily
+        WHERE snapshot_date >= (SELECT MAX(snapshot_date) FROM customer_debt_daily) - INTERVAL '7 days'
+        ORDER BY customer_name, snapshot_date`
+    )
+    const axis = [...new Set(trendRows.rows.map((r) => r.d))].sort()
+    const sparkMap = new Map()
+    for (const r of trendRows.rows) {
+      if (!sparkMap.has(r.customer_name)) sparkMap.set(r.customer_name, {})
+      sparkMap.get(r.customer_name)[r.d] = r.v
+    }
+    // 每个客户：按日期轴展开成数组（缺失天为 null，前端折线跳过）
+    list.forEach((row) => {
+      const m = sparkMap.get(row.customer_name) || {}
+      row.spark = axis.map((d) => (m[d] === undefined ? null : m[d]))
+      // 近 N 日趋势：用「最早一天 vs 今天」，都缺则为 null
+      const first = row.spark.find((v) => v !== null)
+      const last = row.spark[row.spark.length - 1]
+      row.sparkStart = first === undefined ? null : first
+      row.sparkEnd = last === null || last === undefined ? null : last
+      row.sparkDiff = row.sparkStart === null || row.sparkEnd === null ? null : row.sparkEnd - row.sparkStart
+    })
+
+    // 全体合计走势（标题栏那条）
+    const trend = {
+      axis,
+      series: axis.map((d) => trendRows.rows.filter((r) => r.d === d).reduce((a, r) => a + Number(r.v || 0), 0)),
+    }
+    trend.start = trend.series[0] ?? null
+    trend.end = trend.series[trend.series.length - 1] ?? null
+    trend.diff = trend.start === null || trend.end === null ? null : trend.end - trend.start
+    trend.pct = trend.start ? (trend.diff / trend.start) * 100 : null
     const sum = (k) => list.reduce((a, r) => a + Number(r[k] || 0), 0)
     const summary = {
       customerCount: list.length,
@@ -2732,6 +2769,7 @@ router.get('/customer-debt', async (req, res, next) => {
       summary,
       productLines,
       productLineMeta: PRODUCT_LINES,
+      trend,
       rows: list,
       depts: (await query(
         `SELECT DISTINCT COALESCE(NULLIF(TRIM(department),''),'（未分类）') AS dept
