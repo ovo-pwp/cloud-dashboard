@@ -275,6 +275,7 @@
           class="pay-detail"
           :header-cell-style="{ background: '#2c3e50', color: '#fff' }"
           :cell-style="{ padding: '8px 0' }"
+          :span-method="(p) => payNoteSpan(p, c.rows)"
           show-summary
           :summary-method="summaryByProp"
         >
@@ -878,6 +879,26 @@ function noteLevel(note) {
   if (/删行|无回款|异常|作废/.test(s)) return 'bad'
   if (/补录|只回|差 /.test(s)) return 'backfill'
   return 'normal'
+}
+
+/**
+ * 备注列纵向合并（2026-11-23 使用者圈出截图「这里重复了，就不用写这么一大推了」）。
+ *
+ * 备注的键是「卡片 + 部门 + 客户」（一个客户一份说明），但回款卡按**账龄**拆行 ⇒
+ * 同一客户 3 个账龄行会把同一句备注抄 3 遍，单元格被撑高好几行，看着像出了错。
+ * 这里按「部门 + 客户」把备注格纵向合并：只在第一行渲染一次，其余行 rowspan=0。
+ * 其它列不合并（账龄/张数/金额是逐行的真实数据，合了反而看不出来）。
+ * ⚠️ 依赖 `bySpCustomer` 的排序：同一客户的行必须相邻，否则合并不成（会在中间断开，
+ *    不会串到别人身上，但备注会重复）。改排序逻辑时别忘了这里。
+ */
+function payNoteSpan({ row, column, rowIndex }, rows) {
+  if (column.label !== '备注') return
+  const keyOf = (r) => `${r?.salesperson || ''}\u0000${r?.customer_name || ''}`
+  const key = keyOf(row)
+  if (rowIndex > 0 && keyOf(rows[rowIndex - 1]) === key) return { rowspan: 0, colspan: 0 }
+  let span = 1
+  while (rowIndex + span < rows.length && keyOf(rows[rowIndex + span]) === key) span++
+  return { rowspan: span, colspan: 1 }
 }
 
 // 部门备注（矩阵用）— 2026-10-26 17:52 使用者澄清「不是总表」，矩阵不再显示，逻辑保留备用

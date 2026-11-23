@@ -13,7 +13,8 @@
  * 规则：
  *   · 只写「当日回款」卡（card_key='pay'）
  *   · **人工备注优先**：ledger_note.source='manual' 的行永不覆盖
- *   · 备注格式：`单号 金额 性质`，同客户多单用「；」连接
+ *   · 备注格式：`单号 金额 性质`，同客户多单用「；」连接；
+ *     **同一性质多笔合并成一条**（`补录 11/12 3 笔 14,518.10`），不再逐单罗列（2026-11-23 使用者要求）
  */
 
 import fs from 'node:fs'
@@ -69,6 +70,32 @@ function normDate(s) {
 const fmt = (n) => Number(n || 0).toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
 
 /**
+ * 把一个「部门 + 客户」的异常单拼成一句备注。
+ *
+ * 2026-11-23 使用者（截图圈出备注列）「这里重复了，就不用写这么一大推了」：
+ * 原来逐单平铺「2026-1212 6,908.2 补录 11/12；2026-1388 5,599.8 补录 11/12；2026-1517 2,010.1 补录 11/12」，
+ * 三笔同一性质的补录把单元格撑成三行、还跟着账龄行重复三遍。现在：
+ *   · 1 笔  → 保留单号（`2026-158 284.26 补录 11/20`），单笔不给单号等于没法查；
+ *   · ≥2 笔 → 同类合并成一条（`补录 11/12 3 笔 14,518.10`），明细去 /trace 查。
+ * 真回款照旧只给「正常回款 N 笔 金额」，不逐单列。
+ */
+function composeNote(g) {
+  const parts = []
+  const byKind = new Map() // 性质 → { docs, amt }
+  for (const b of g.bad) {
+    if (!byKind.has(b.kind)) byKind.set(b.kind, { docs: [], amt: 0 })
+    const k = byKind.get(b.kind)
+    k.docs.push(b.docNo)
+    k.amt += b.amt
+  }
+  for (const [kind, k] of byKind) {
+    parts.push(k.docs.length === 1 ? `${k.docs[0]} ${fmt(k.amt)} ${kind}` : `${kind} ${k.docs.length} 笔 ${fmt(k.amt)}`)
+  }
+  if (g.normal) parts.push(`正常回款 ${g.normal} 笔 ${fmt(g.normalAmt)}`)
+  return parts.join('；')
+}
+
+/**
  * 生成并写入自动备注。返回统计信息。
  * @param {string} bizType 业务线（目前只处理 billed_unpaid）
  */
@@ -87,14 +114,18 @@ export async function autoAnnotatePayments(bizType = 'billed_unpaid') {
   const [cur, prev] = bs
 
   // 2) 本批消失的单（含客户/部门，用于定位备注键）
+  //    🔴 DISTINCT ON：源表同一单号会按账龄/产品线拆成多行，不去重的话
+  //    备注里会出现「2026-1212 …；2026-1212 …」同一条重复两三遍
+  //    （2026-11-23 使用者「这里重复了」）。
   const removed = (
     await query(
-      `SELECT p.doc_no, p.customer_name, p.department, p.amount_total::float8 amt
+      `SELECT DISTINCT ON (p.doc_no) p.doc_no, p.customer_name, p.department, p.amount_total::float8 amt
          FROM receivable_detail p
         WHERE p.batch_id = $1
           AND NOT EXISTS (
             SELECT 1 FROM receivable_detail c WHERE c.batch_id = $2 AND c.doc_no = p.doc_no
-          )`,
+          )
+        ORDER BY p.doc_no, p.aging_category`,
       [prev.id, cur.id]
     )
   ).rows
@@ -148,7 +179,7 @@ export async function autoAnnotatePayments(bizType = 'billed_unpaid') {
     const key = `${r.department || ''}\u0000${r.customer_name || ''}`
     if (!groups.has(key)) groups.set(key, { normal: 0, normalAmt: 0, bad: [] })
     const g = groups.get(key)
-    if (abnormal) g.bad.push(`${r.doc_no} ${fmt(r.amt)} ${kind}`)
+    if (abnormal) g.bad.push({ docNo: r.doc_no, amt: Number(r.amt) || 0, kind })
     else { g.normal++; g.normalAmt += Number(r.amt) }
 
   }
@@ -165,10 +196,7 @@ export async function autoAnnotatePayments(bizType = 'billed_unpaid') {
   let kept = 0
   for (const [key, g] of groups) {
     const [department, customer] = key.split('\u0000')
-    const parts = []
-    if (g.bad.length) parts.push(...g.bad)
-    if (g.normal) parts.push(`正常回款 ${g.normal} 笔 ${fmt(g.normalAmt)}`)
-    const note = parts.join('；').slice(0, 500)
+    const note = composeNote(g).slice(0, 500)
     const existing = (
       await query(
         `SELECT source FROM ledger_note
