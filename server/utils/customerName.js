@@ -84,6 +84,25 @@ const ORG_SUFFIXES = [
 const DEPT_SHORT = ['个金', '个贷', '个数', '三农', '私银', '财富', '零售', '卡', '网金']
 
 /**
+ * 人名里的多余「一」：源表把「刘洋」写成「刘一洋」、「郑鹏」写成「郑一鹏」。
+ * 2026-11-23 使用者「把那些有一的去掉一」。
+ *
+ * 🔴 **只动人名段，绝不碰机构名**：`五一路支行` 里的「一」是真地名，
+ *    去掉就成了「五路支行」。所以：
+ *      · 只看最后一段（人名所在段）；
+ *      · 必须形如「姓 + 一 + 1~2 字」，且首字是常见姓氏；
+ *      · 「五一路支行」这种首字不是姓氏、或长度不对的，一律不匹配。
+ */
+const YI_NAME_RE = /^([\u4e00-\u9fa5])一([\u4e00-\u9fa5]{1,2})$/
+
+function stripYiInPerson(person) {
+  const m = String(person || '').match(YI_NAME_RE)
+  if (!m) return null
+  if (!SURNAMES.has(m[1])) return null
+  return m[1] + m[2]
+}
+
+/**
  * 人名校验：够不够像一个人名
  * @param strict true=必须整段就是人名（用于「机构切完剩下的」这种已定边界的场合）；
  *               false=允许「以称呼结尾」（如「阿兴行长」「陈经理」）
@@ -236,6 +255,19 @@ export function normalizeCustomerName(raw, dict = null) {
     if (hit) {
       s = hit.org + '-' + hit.person
       rule = hit.how
+    }
+  }
+
+  // ── 3.5 人名里的多余「一」（刘一洋 → 刘洋；机构名不动）────────
+  {
+    const list = s.split('-').filter(Boolean)
+    if (list.length) {
+      const fixed = stripYiInPerson(list[list.length - 1])
+      if (fixed) {
+        list[list.length - 1] = fixed
+        s = list.join('-')
+        rule = rule || 'strip-yi'
+      }
     }
   }
 
