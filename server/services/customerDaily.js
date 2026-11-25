@@ -39,12 +39,20 @@ export async function ensureCustomerDailyTable(pool) {
   await pool.query(CREATE_SQL)
 }
 
+/** 本地日期 YYYY-MM-DD（🔴 不能用 toISOString：那是 UTC，早上 8 点前会算成「昨天」，
+ *  把昨天的最终快照覆盖成凌晨的数据） */
+function localDay() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 /**
  * 写当日客户级快照（同一天重复调用会覆盖 ⇒ 始终是最新状态）
  * @returns {{rows:number, snapshotDate:string}}
  */
 export async function writeCustomerDailySnapshot(pool, { snapshotDate } = {}) {
-  const day = snapshotDate || new Date().toISOString().slice(0, 10)
+  const day = snapshotDate || localDay()
   await pool.query(CREATE_SQL)
 
   // 取两条线各自最新批次

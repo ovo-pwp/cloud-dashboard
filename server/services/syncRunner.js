@@ -21,6 +21,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { query, pool } from '../db/pool.js'
 import { resolveExecutable } from '../utils/executable.js'
+import { writeCustomerDailySnapshot } from './customerDaily.js'
+import { refreshPayInfo, autoAnnotatePayments } from './autoNote.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '../..')
@@ -642,6 +644,31 @@ export async function startSync({ trigger = 'manual' } = {}) {
       state.sources = await collectSources()
     } catch (err) {
       pushLog(`刷新数据源快照失败：${err.message}`)
+    }
+
+    // 🔴 手动同步的收尾必须和定时同步一致（2026-11-25 修）：
+    //   以前只有 scheduler 会写「客户欠款日快照」和重算回款备注，手动点「立即同步」不写，
+    //   于是当天页面已经是新数据、快照却停在上一轮定时同步 —— 「较昨日」凭空多出
+    //   360,000（杭州平安杨薇娜 当时已结清但从快照里没消失），合计也和页面差 36 万。
+    //   现在两条路径都在「导入成功后」做同样三件事：pay-info 落库 → 回款备注 → 日快照。
+    if (state.ok) {
+      try {
+        const pi = await refreshPayInfo()
+        const an = await autoAnnotatePayments('billed_unpaid')
+        pushLog(
+          an.skipped
+            ? `  · 回款备注自动标注跳过：${an.reason || ''}${pi.reason ? ' / pay-info ' + pi.reason : ''}`
+            : `  · 回款备注自动标注：写 ${an.written} 条、保留人工 ${an.keptManual} 条`
+        )
+      } catch (err) {
+        pushLog(`  ⚠ 回款备注自动标注失败：${err.message}`)
+      }
+      try {
+        const snap = await writeCustomerDailySnapshot(pool)
+        pushLog(`  · 客户欠款日快照：${snap.snapshotDate}（${snap.rows} 个客户）`)
+      } catch (err) {
+        pushLog(`  ⚠ 客户欠款日快照写入失败：${err.message}`)
+      }
     }
   }
 
