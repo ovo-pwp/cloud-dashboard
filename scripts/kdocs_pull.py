@@ -590,10 +590,9 @@ def compute_aging(recs, aging, base=None):
         f = r.setdefault("fields", {})
         d = _d(f.get(dc))
         raw = _cell_text(f.get(ac))
-        try:
-            amt = float(raw) if raw and not raw.startswith("#") else 0.0
-        except Exception:
-            amt = 0.0
+        # 🔴 2026-11-26：源表金额列从「数字」变成了「带千分位的文本」（"27,775.12"），
+        #    这里原来直接 float(raw)，遇到逗号就抛异常 → 金额按 0 处理 → 账龄全错。
+        amt = to_num(raw) if raw and not raw.startswith("#") else 0.0
         if d is None:
             idx = 0 if amt else 4
         else:
@@ -650,10 +649,11 @@ def apply_view_filter(recs, spec, tag=""):
             v2 = _cell_text((r.get("fields") or {}).get(nz_col))
             if not v2 or v2.startswith("#"):
                 return False
-            try:
-                return float(v2) > 0.005
-            except Exception:
-                return False
+            # 🔴 2026-11-26：金额列变成带千分位的文本（"27,775.12"）后，
+            #    这里原来直接 float(v2)，逗号让它抛异常 → 整行被判成 0 被剔掉。
+            #    当天未回款从 6,294,592.05 掉到 19,555.66、未开票从 13,245,860.95
+            #    掉到 66,906.76，就是这一行造成的（只有 <1000 的小额没千分位才活下来）。
+            return to_num(v2) > 0.005
         kept = [r for r in out if _nz(r)]
         log(f"    {tag} 只保留「{nz_col}」为正：{len(out)} -> {len(kept)} 条（剔除 {len(out)-len(kept)} 条）")
         out = kept
@@ -761,6 +761,20 @@ SALESMAN_ALIAS = {
 CUSTOMER_ALIAS = {
     "来宾农行网金王元恢": "来宾农行网金部-王元恢",
 }
+
+
+def _xlsx_data_rows(path):
+    """上一份导出文件的数据行数（给「行数骤降」闸门用）。读不到就返回 0。"""
+    try:
+        if not os.path.exists(path):
+            return 0
+        wb = openpyxl.load_workbook(path, read_only=True)
+        ws = wb.active
+        n = max(0, int(ws.max_row or 1) - 1)
+        wb.close()
+        return n
+    except Exception:
+        return 0
 
 
 def sanity_check(recs, spec, tag=""):
@@ -1121,6 +1135,15 @@ def main():
             #    改完取数整列变空 ⇒ 看板「未指定/未分类」、财务过滤失效，还会静默上线。
             #    这里做体检：业务员空值率 >50% 直接拒绝覆盖（保住上一份正确的数据）；
             #    20%~50% 打告警但仍写出（可能确实有少量单没填业务员）。
+            # 🔴 2026-11-26 事故防护（行数骤降）：金额列类型一变，过滤会把大额行整批剔掉，
+            #    行数从 247 掉到 47 却依然「成功」。这里跟上一份导出文件比行数，
+            #    不足一半就判定为异常，**拒绝覆盖**（保住上一份正确数据），等人工确认。
+            prev_n = _xlsx_data_rows(os.path.join(OUT_DIR, spec["out_name"]))
+            if prev_n >= 20 and len(recs) < prev_n * 0.5:
+                log(f"    [严重] {key} 行数骤降 {prev_n} → {len(recs)}（不足一半）"
+                    f"⇒ 源表金额列类型/字段可能又变了，**本次不覆盖导出文件**")
+                fail.append(key)
+                continue
             if not sanity_check(recs, spec, key):
                 fail.append(key)
                 continue
