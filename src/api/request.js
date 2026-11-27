@@ -37,6 +37,23 @@ export function setUnauthorizedHandler(fn) {
 
 let redirecting = false
 
+/** 同一个提示 8 秒内只弹一次（并发请求 / 轮询失败时会堆一屏，2026-11-27 使用者截图就是一串 502） */
+let lastToast = { msg: '', at: 0 }
+function toastError(msg) {
+  const now = Date.now()
+  if (msg === lastToast.msg && now - lastToast.at < 8000) return
+  lastToast = { msg, at: now }
+  ElMessage.error(msg)
+}
+
+/**
+ * 502/503/504 = Cloudflare 边缘连不上本机 cloudflared（隧道瞬时断开），
+ * 属于**链路抖动**而不是业务错误 ⇒ 和「没收到响应」一样按瞬时失败处理，先重试。
+ * 2026-11-27：原先这类有响应码的 5xx 一律不重试、直接弹「服务端错误 (502)」，
+ * 页面一次 4~7 个请求就弹 7 个红条，实际十几秒后隧道自己就恢复了。
+ */
+const EDGE_STATUS = new Set([502, 503, 504])
+
 // 这些错误由登录页自己就地提示（它握着表单，能展示得更贴切），拦截器不再重复弹窗
 const SILENT_CODES = new Set(['BAD_CREDENTIALS', 'TOO_MANY_ATTEMPTS'])
 
@@ -50,11 +67,16 @@ request.interceptors.response.use(
     // 撞上就是「加载不出来」。这类失败是**瞬时**的，重试一两次基本就过了。
     //
     // ⚠️ 只重试 GET：POST 可能是登录 / 触发同步，重试会造成副作用。
-    // ⚠️ 只重试「超时」和「压根没收到响应」两种；收到 4xx/5xx 说明服务端已明确表态，不重试。
+    // ⚠️ 重试「超时」「压根没收到响应」以及 502/503/504（隧道断，见 EDGE_STATUS）；
+    //    4xx 和其余 5xx 是服务端明确表态，不重试。
     // ------------------------------------------------------------
     const cfg = error.config
+    const status = error.response?.status
+    const edgeDown = EDGE_STATUS.has(status)
     const transient =
-      error.code === 'ECONNABORTED' || (!error.response && !error.code?.startsWith('ERR_CANCELED'))
+      error.code === 'ECONNABORTED' ||
+      edgeDown ||
+      (!error.response && !error.code?.startsWith('ERR_CANCELED'))
     const isGet = cfg && String(cfg.method || '').toLowerCase() === 'get'
     const tried = cfg?.__retryCount ?? 0
     // 2026-10-30：退避从 400/800ms 改成 1s/3s/6s、重试 3 次。
@@ -67,8 +89,6 @@ request.interceptors.response.use(
       await new Promise((r) => setTimeout(r, wait))
       return request(cfg)
     }
-
-    const status = error.response?.status
 
     // 导出接口用的是 responseType:'blob'，出错时响应体也是 Blob，
     // 直接读 .error 会拿不到，这里先还原成 JSON 再继续
@@ -111,13 +131,16 @@ request.interceptors.response.use(
 
     if (error.code === 'ECONNABORTED') {
       msg = '请求超时，请检查网络或后端服务'
+    } else if (edgeDown) {
+      // 重试 3 次仍 502：说明隧道真的断了，看门狗会在 5 分钟内拉起 cloudflared
+      msg = '公网链路暂时中断，系统正在自动重连，请稍后刷新'
     } else if (error.response) {
       msg = error.response.data?.error || `服务端错误 (${status})`
     } else if (error.request) {
       msg = '无法连接后端服务，请确认 API 已启动'
     }
 
-    ElMessage.error(msg)
+    toastError(msg)
     return Promise.reject(error)
   }
 )

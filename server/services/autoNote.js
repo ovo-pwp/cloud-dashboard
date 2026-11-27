@@ -129,7 +129,9 @@ export async function autoAnnotatePayments(bizType = 'billed_unpaid') {
       [prev.id, cur.id]
     )
   ).rows
-  if (!removed.length) return { skipped: false, groups: 0, note: 'no removed' }
+  // 本批没有单消失 ⇒ 没有需要标注的；written/keptManual 给 0，
+  // 否则调用方日志会打出「写 undefined 条」（2026-11-27 日志里就是这个）
+  if (!removed.length) return { skipped: false, groups: 0, written: 0, keptManual: 0, removed: 0, note: 'no removed' }
 
   // 3) 查 pay_info
   const docs = [...new Set(removed.map((r) => r.doc_no))]
